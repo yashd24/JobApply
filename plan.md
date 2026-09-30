@@ -9,7 +9,7 @@ This plan is for Claude Code. Read it fully before writing any code.
 - **Never weaken the honesty rules** in section 3 to make something "work." If a rule blocks progress, report it and ask.
 - **Never submit a real application during development** unless the user explicitly approves that specific job. Use `--dry-run` everywhere else.
 - **Target platform is Windows** (the user's laptop). Use `pathlib`, avoid shell-specific commands, test paths with spaces, and read/write all files as UTF-8.
-- Keep secrets (cookies, browser profile, tokens, `profile.yaml`) out of git.
+- Keep secrets and personal data (cookies, browser profile, tokens, `profile.yaml`, `contact.yaml` with the resume-header email and phone) out of git. Committed files and tests use placeholders or fictional values only.
 
 ## 1. Goal
 

@@ -1,0 +1,4 @@
+# Copy to contact.yaml (gitignored) and fill in. These two values are printed in the resume header;
+# they are kept out of resume_data.yaml so that file can be committed without them.
+email: TODO
+phone: TODO          # keep the quotes, e.g. "+00 000 000 0000"

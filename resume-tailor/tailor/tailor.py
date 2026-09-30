@@ -34,6 +34,7 @@ import render
 ROOT = Path(__file__).resolve().parent
 TEMPLATE_DIR = ROOT / "template"
 DATA_FILE = ROOT / "resume_data.yaml"
+CONTACT_FILE = ROOT / "contact.yaml"      # gitignored: the email and phone printed in the header
 OUTPUT_DIR = ROOT / "output"
 PDF_NAME = "Yashdeep_Sahu_Resume.pdf"
 
@@ -45,6 +46,21 @@ except Exception:
 
 class TailorError(RuntimeError):
     """A recoverable failure in tailoring (missing tool, Claude error, LaTeX error...)."""
+
+
+def load_resume_data() -> dict:
+    """resume_data.yaml plus the private email/phone from contact.yaml."""
+    data = yaml.safe_load(DATA_FILE.read_text(encoding="utf-8"))
+    if not CONTACT_FILE.exists():
+        raise TailorError(f"{CONTACT_FILE.name} not found. Copy contact.example.yaml to contact.yaml and "
+                          "fill in your email and phone (it is gitignored).")
+    contact = yaml.safe_load(CONTACT_FILE.read_text(encoding="utf-8")) or {}
+    for key in ("email", "phone"):
+        value = str(contact.get(key) or "").strip()
+        if not value or value.upper() == "TODO":
+            raise TailorError(f"{CONTACT_FILE.name}: '{key}' is missing or still TODO.")
+        data[key] = value
+    return data
 
 
 # ─── Job description input ───────────────────────────────────────────────────
@@ -485,7 +501,7 @@ def tailor_job(company: str, role: str, jd_text: str, jd_url: str = "", *,
     skill order and guarded keyword edits change. allow_selection=True restores the old
     behaviour where Claude may add/drop bullets. Raises TailorError on recoverable failures."""
     output_dir = output_dir or OUTPUT_DIR
-    data = yaml.safe_load(DATA_FILE.read_text(encoding="utf-8"))
+    data = load_resume_data()
     output_dir.mkdir(exist_ok=True)
     if len(jd_text.strip()) < 200:
         raise TailorError("Job description is too short — paste the full text.")
@@ -558,7 +574,7 @@ def main() -> None:
 
     try:
         if args.base:
-            data = yaml.safe_load(DATA_FILE.read_text(encoding="utf-8"))
+            data = load_resume_data()
             OUTPUT_DIR.mkdir(exist_ok=True)
             tex, pdf, _ = fit_to_one_page(data, render.default_plan(data), OUTPUT_DIR / "_build")
             dest = OUTPUT_DIR / "base"

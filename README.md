@@ -30,6 +30,8 @@ guard.py             validates everything Claude proposes; enforces the honesty 
 render.py            renders resume.tex from resume_data.yaml
 resume_data.yaml     the single source of truth for resume content (bullets have ids)
 template/            the LaTeX class, fonts and original resume
+contact.example.yaml the email + phone printed in the resume header, values TODO (committed)
+contact.yaml         your real email + phone (gitignored; kept out of resume_data.yaml)
 profile.example.yaml the profile outline, every value TODO (committed)
 profile.yaml         your real answers (gitignored, never committed)
 jobbot/profile.py    load/validate the profile; fill-time answers
@@ -51,6 +53,7 @@ browser_profile/     the automation browser's logins/cookies (gitignored)
    python -m venv .venv
    .venv\Scripts\python -m pip install -r requirements.txt
    .venv\Scripts\python -m playwright install chromium
+   copy contact.example.yaml contact.yaml      (then put your email and phone in it)
    .venv\Scripts\python tailor.py --base
    ```
    `output\base\` holds the untailored PDF; it should match your current resume.

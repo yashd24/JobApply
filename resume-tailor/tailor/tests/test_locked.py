@@ -18,6 +18,7 @@ import render  # noqa: E402
 import tailor  # noqa: E402
 
 DATA = yaml.safe_load((ROOT / "resume_data.yaml").read_text(encoding="utf-8"))
+DATA.update(email="test.user@example.com", phone="+00 000 000 0000")   # fictional; real ones are in contact.yaml
 JD = "Python Django Redis Docker PostgreSQL REST APIs backend developer. " * 6
 TEXTS = render._bullet_lookup(DATA)
 

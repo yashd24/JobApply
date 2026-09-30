@@ -12,9 +12,8 @@
 # to the LLM for editing — only bullet text is eligible for keyword insertion.
 # ─────────────────────────────────────────────────────────────────────────────
 
+# email and phone live in contact.yaml (gitignored) and are merged in by tailor.load_resume_data()
 name: Yashdeep Sahu
-email: yashdeepsahu2406@gmail.com
-phone: "+91 8770779761"
 linkedin: yashdeep-sahu
 github: yashd24
 
