@@ -1,0 +1,11 @@
+{
+  "id": "0a1b2c3d-1111-2222-3333-444455556666",
+  "text": "Software Engineer - Backend",
+  "categories": {"location": "Remote - India", "team": "Platform", "commitment": "Full Time", "allLocations": ["Remote - India"]},
+  "descriptionPlain": "Join our platform team and build APIs.",
+  "description": "<div>Join our platform team and build APIs.</div>",
+  "lists": [{"text": "Requirements", "content": "<li>Python</li><li>Redis</li>"}],
+  "additionalPlain": "We are an equal opportunity employer.",
+  "hostedUrl": "https://jobs.lever.co/examplelever/0a1b2c3d-1111-2222-3333-444455556666",
+  "applyUrl": "https://jobs.lever.co/examplelever/0a1b2c3d-1111-2222-3333-444455556666/apply"
+}

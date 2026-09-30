@@ -1,0 +1,31 @@
+# secrets / personal data
+profile.yaml
+config.yaml
+tailor/profile.yaml
+tailor/config.yaml
+*.token.json
+credentials.json
+token.json
+
+# runtime artefacts
+output/
+tailor/output/
+browser_profile/
+tailor/browser_profile/
+__pycache__/
+*.pyc
+.pytest_cache/
+
+# LaTeX build junk
+*.aux
+*.log
+*.out
+*.fls
+*.fdb_latexmk
+*.xdv
+
+# virtual environment
+.venv/
+resume-tailor/tailor/profile.yaml
+resume-tailor/tailor/config.yaml
+resume-tailor/tailor/browser_profile/

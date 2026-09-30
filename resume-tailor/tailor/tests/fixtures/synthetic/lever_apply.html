@@ -1,0 +1,26 @@
+<!DOCTYPE html>
+<html><head><title>Example Lever Co - Software Engineer - Backend</title>
+<script src="https://js.hcaptcha.com/1/api.js"></script></head>
+<body><form id="application-form" method="POST"><ul>
+<li class="application-question resume"><div class="application-label"><div class="text">Resume/CV</div></div>
+  <div class="application-field"><input type="file" name="resume"/></div></li>
+<li class="application-question"><div class="application-label"><div class="text">Full name <span class="required">✱</span></div></div>
+  <div class="application-field"><input type="text" name="name"/></div></li>
+<li class="application-question"><div class="application-label"><div class="text">Email <span class="required">✱</span></div></div>
+  <div class="application-field"><input type="email" name="email"/></div></li>
+<li class="application-question custom-question"><div class="application-label multiple-choice"><div class="text">Are you eligible to work in India? <span class="required">✱</span></div></div>
+  <div class="application-field"><ul data-qa="multiple-choice">
+    <li><label><input type="radio" name="cards[abc][field0]" value="Yes"/><span class="application-answer-alternative">Yes</span></label></li>
+    <li><label><input type="radio" name="cards[abc][field0]" value="No"/><span class="application-answer-alternative">No</span></label></li>
+  </ul></div></li>
+<li class="application-question custom-question"><div class="application-label"><div class="text">Expected CTC</div></div>
+  <div class="application-field"><textarea name="cards[abc][field1]"></textarea></div></li>
+<li class="application-question custom-question"><div class="application-label"><div class="text">Notice period</div></div>
+  <div class="application-field"><select name="cards[abc][field2]"><option value="">Select</option><option value="15">15 days</option><option value="30">30 days</option></select></div></li>
+<li class="application-question"><div class="application-label multiple-choice"><div class="text">What gender do you identify as?</div></div>
+  <div class="application-field"><ul>
+    <li><label><input type="radio" name="surveysResponses[s1][responses][field0]" value="Male"/><span class="application-answer-alternative">Male</span></label></li>
+    <li><label><input type="radio" name="surveysResponses[s1][responses][field0]" value="Female"/><span class="application-answer-alternative">Female</span></label></li>
+  </ul></div></li>
+<li class="application-question"><div class="application-field full-width"><ul><li><label><input name="consent[marketing]" type="hidden" value="0"/><input name="consent[marketing]" type="checkbox" value="1"/><p class="application-answer-alternative">Yes, Example can contact me about future roles</p></label></li></ul></div></li>
+</ul></form></body></html>

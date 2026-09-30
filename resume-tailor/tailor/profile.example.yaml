@@ -1,0 +1,69 @@
+# Copy to profile.yaml (gitignored) and replace every TODO with your own value.
+# Nothing here is filled in on your behalf. A TODO in a field a form needs
+# stops the run; a country missing from work_authorization is flagged, not guessed.
+
+personal:
+  first_name: TODO
+  last_name: TODO
+  email: TODO
+  phone: TODO
+  current_location: {city: TODO, state: TODO, country: TODO}
+  linkedin: TODO
+  github: TODO
+  portfolio: TODO                      # use "" if you have none
+
+employment:
+  current_company: TODO                # still used after the last working day
+  current_title: TODO
+  # Experience is computed at fill time from these dates (never stored as a number).
+  # Default: full-time + internship, unless a form asks about one specifically.
+  fulltime_start: TODO                 # "YYYY-MM"
+  zintlr_internship_start: TODO        # "YYYY-MM"
+  zintlr_internship_end: TODO          # "YYYY-MM", inclusive month
+  serving_notice: TODO                 # true / false
+  notice_period_days: TODO
+  last_working_day: TODO               # YYYY-MM-DD
+  earliest_start_date: TODO            # YYYY-MM-DD; "Immediately" is answered once it has passed
+
+compensation:                          # only ever used from here, never estimated. INR, per year, in LPA.
+  current_ctc:
+    fixed_lpa: TODO
+    variable_lpa: TODO
+    stated_total_lpa: TODO             # the total as you state it, if different from fixed + variable
+    stated_total_includes: TODO        # e.g. what the total includes beyond fixed + variable
+    report_as: TODO                    # which figure forms get: fixed | fixed_plus_variable | stated_total
+  expected_ctc_inr_lpa: TODO           # a single number
+  # Only INR. On non-Indian forms salary questions are flagged; current CTC is filled only if required.
+
+work_authorization:                    # per country; countries not listed use default_other (flagged while it is TODO)
+  India: {authorized: TODO, needs_sponsorship: TODO}
+  default_other: {authorized: TODO, needs_sponsorship: TODO}
+  # add specific countries, e.g.  Germany: {authorized: TODO, needs_sponsorship: TODO}
+
+preferences:
+  willing_to_relocate: TODO
+  work_modes: [TODO]                   # onsite / hybrid / remote
+
+education:
+  degree: TODO
+  institution: TODO
+  institution_location: TODO
+  affiliation: TODO                    # university the college is affiliated to
+  start_year: TODO
+  graduation: TODO                     # "YYYY-MM"
+  cgpa: TODO                           # e.g. "8.5 / 10"
+  percentage: TODO                     # from your transcript's conversion; left TODO -> percentage questions are flagged
+  twelfth: {board: TODO, year: TODO, percentage: TODO}
+  tenth: {board: TODO, year: TODO, percentage: TODO}
+
+eeo:                                   # sensitive: matched to a form's options from here only
+  gender: TODO
+  ethnicity: TODO
+  ethnicity_broad: TODO                # used when a form only offers broad categories, e.g. Asian
+  veteran_status: TODO
+  disability_status: TODO
+  if_no_matching_option: TODO          # decline | flag - what to do when no option fits
+
+custom_answers: {}                     # reusable answers you write or approve yourself
+# "how did you hear" is not stored: it is derived from the platform the job came from.
+# "why are you looking to move"-style questions are always flagged for you.

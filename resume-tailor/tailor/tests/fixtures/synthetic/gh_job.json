@@ -1,0 +1,31 @@
+{
+  "id": 4111111,
+  "title": "Backend Engineer",
+  "company_name": "Examplecorp",
+  "location": {"name": "Bengaluru, India"},
+  "absolute_url": "https://job-boards.greenhouse.io/examplecorp/jobs/4111111?gh_jid=4111111",
+  "content": "&lt;p&gt;We build &lt;strong&gt;payment&lt;/strong&gt; APIs.&lt;/p&gt;&lt;ul&gt;&lt;li&gt;Python and Django&lt;/li&gt;&lt;li&gt;PostgreSQL&lt;/li&gt;&lt;/ul&gt;",
+  "questions": [
+    {"description": null, "label": "First Name", "required": true, "fields": [{"name": "first_name", "type": "input_text", "values": []}]},
+    {"description": null, "label": "Resume/CV", "required": true, "fields": [
+      {"name": "resume", "type": "input_file", "values": []},
+      {"name": "resume_text", "type": "textarea", "values": []}]},
+    {"description": "&lt;p&gt;Pick one&lt;/p&gt;", "label": "Are you legally authorized to work in India?", "required": true, "fields": [
+      {"name": "question_1", "type": "multi_value_single_select", "values": [
+        {"label": "Yes", "value": 1}, {"label": "No", "value": 0}]}]},
+    {"description": null, "label": "Which of these have you used?", "required": false, "fields": [
+      {"name": "question_2", "type": "multi_value_multi_select", "values": [
+        {"label": "Django", "value": 11}, {"label": "Flask", "value": 12}]}]},
+    {"description": null, "label": "Why do you want to work here?", "required": false, "fields": [{"name": "question_3", "type": "textarea", "values": []}]}
+  ],
+  "location_questions": [
+    {"description": null, "label": "Location", "required": true, "fields": [{"name": "location", "type": "input_text", "values": []}]}
+  ],
+  "demographic_questions": {
+    "header": "Voluntary self-identification",
+    "questions": [
+      {"id": 901, "label": "Gender", "required": false, "type": "multi_value_single_select",
+       "answer_options": [{"id": 1, "label": "Male"}, {"id": 2, "label": "Female"}, {"id": 3, "label": "Decline to self-identify"}]}
+    ]
+  }
+}

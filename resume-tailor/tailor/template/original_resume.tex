@@ -1,0 +1,249 @@
+\documentclass[]{resume-openfont}
+
+\pagestyle{fancy}
+\resetHeaderAndFooter
+
+%--------------------------------------------------------------
+% Convenience command - make it easy to fill template
+
+% Create job position command. Parameters: company, position, location, when
+\newcommand{\resumeHeading}[4]{\runsubsection{\uppercase{#1}}\descript{ | #2}\hfill\location{#3 | #4}\fakeNewLine}
+
+% Create education heading. Parameters: Name, degree, location, when
+\newcommand{\educationHeading}[4]{\runsubsection{#1}\hspace*{\fill}  \location{#3 | #4}\\
+\descript{#2}\fakeNewLine}
+
+% Create project heading. Parameters: Name, link, Tech stack
+\newcommand{\projectHeading}[3]{\Project{#1}{#2}
+\descript{#3}\\}
+
+\newcommand{\projectHeadingWithDate}[4]{\Project{#1}{#2}
+\descript{#3 | #4}\\}
+
+% Parameters: courses
+\newcommand{\courseWork}[1]{\textbf{Coursework:} #1}
+
+% Parameters: courses
+\newcommand{\cgpa}[1]{\textbf{CGPA:} #1}
+ 
+%--------------------------------------------------------------
+\begin{document}
+
+%--------------------------------------------------------------
+%     Profile
+%--------------------------------------------------------------
+\newcommand{\yourName}{First Last}
+% How you want it to show up on the resume
+\newcommand{\yourWebsite}{website.com}
+% vs how you want it to show up. If it's the same you can just replace "\yourWebsiteLink" with "yourWebsite"
+\newcommand{\yourWebsiteLink}{https://website.com}
+\newcommand{\yourEmail}{someEmail@edu.com}
+\newcommand{\yourPhone}{1-234-567-890}
+\newcommand{\githubUserName}{myGithubName}
+\newcommand{\linkedInUserName}{linkedInUsername}
+
+% An alternate profile section 
+% \alignProfileTable
+% \begin{tabular*}{\textwidth}{l@{\extracolsep{\fill}}r}
+%     \ralewayBold{\href{\yourWebsiteLink}{\Large \yourName}} & 
+%     Email : \href{mailto:\yourEmail}{\yourEmail}
+%     \\
+%     \href{https://github.com/\githubUserName}{GitHub://\githubUserName} & 
+%     Mobile : \yourPhone
+%     \\
+%     \href{https://www.linkedin.com/in/\linkedInUserName}{LinkedIn://\linkedInUserName} & Website : \href{\yourWebsiteLink}{\yourWebsite}
+%     \\
+% \end{tabular*}
+
+\begin{center}
+    \Huge \scshape \latoRegular{Yashdeep Sahu} \\ \vspace{1pt}
+    \small \href{mailto:\yourEmail}{\underline{yashdeepsahu2406@gmail.com}}  $|$  +91 8770779761 $|$ 
+    \href{https://www.linkedin.com/in/yashdeep-sahu}{\underline{linkedIn/yashdeep-sahu}} $|$
+    \href{https://github.com/yashd24}{\underline{github/yashd24}} 
+    % $|$ \href{\yourWebsiteLink}{\underline{\yourWebsite}}
+\end{center}
+
+%--------------------------------------------------------------
+%     Education
+%--------------------------------------------------------------
+\section{Education}
+% Put school first and degree second if your school is reputable
+\educationHeading{B.E. in Computer Science and Engineering}{Sir M Visvesvaraya Institute Of Technology}{Bangalore, KA}{Jun 2025}
+
+\cgpa{8.5}
+\sectionsep
+%--------------------------------------------------------------
+%     Skills
+%--------------------------------------------------------------
+
+\section{Skills}
+\begin{skillList}
+    \singleItem{Languages:}{Python, Java, SQL}
+    \\
+    \singleItem{Frameworks/Tools:}{Django, DRF, Celery, Docker, Git/GitHub, Redis, RabbitMQ, Postman}
+    \\
+    \singleItem{Databases:}{PostgreSQL, MongoDB}
+    \\
+    \singleItem{Cloud \& AI:}{AWS, Elasticsearch (ELK), OpenAI API}
+\end{skillList}    
+\sectionsep
+
+%--------------------------------------------------------------
+%     Experience
+%--------------------------------------------------------------
+\section{Professional Experience}
+\resumeHeading{Zintlr}{Associate Software Development Engineer}{Bangalore, KA}{Aug 2025 - Present}
+\begin{bullets}
+    % \item Acted as a point of contact between internal teams and clients, driving clear communication and reducing ambiguity during feature development and releases.
+    % \item Owned end-to-end release planning and coordination, ensuring timely deployments and alignment with business priorities.
+    % \item Enhanced \textbf{subscription lifecycle management} including LTD/churned/expired segmentation, churn workflows, user exports, and limit logging --- improving admin control, observability, and analytics capabilities.
+    \item Led the \textbf{B2B2B partner API platform} (\textbf{80,000+ API calls/week}) --- owning release planning, delegating work across a team of 2 developers, and driving client communications and issue resolution as the primary point of contact.
+    \item Built an \textbf{AI-powered lead scoring pipeline} using \textbf{OpenAI} on the signup flow --- enriches signups with company segmentation, ICP/BANT qualification, competitor detection, and a \textbf{0--100 lead score} pushed to HubSpot, helping the sales team filter out fake signups and prioritize which prospects to pursue.
+    \item Led \textbf{AWS Marketplace} technical setup --- repository structuring, deployment execution, and integration readiness --- successfully listing Zintlr's product on AWS Marketplace; coordinated with AWS team to resolve critical blockers.
+    \item Led \textbf{VAPT compliance renewal} by creating automated Postman collections and security testing scripts for \textbf{250+ APIs}, resolving vulnerabilities and ensuring adherence to \textbf{GDPR, SOC 2, and ISO} compliance standards.
+    \item Contributed to the system design and architectural planning of the \textbf{Nudges system}, shaping infrastructure-level decisions for a scalable notification workflow.
+    \item Implemented a robust \textbf{domain-level block/unblock system} allowing administrators to restrict or restore access across \textbf{1,000+ domains} --- reducing fake signups by enabling manual blocking of fraudulent domains.
+    \item Automated the \textbf{subscription payment workflow}, removing the sales team's dependency on the accounts team for payment link generation --- sales can now generate a Stripe payment link directly from the admin panel and the subscription activates automatically on payment success.
+    \item Enhanced the in-house \textbf{ELK logging stack} by wiring individual log entries to their corresponding \textbf{APM traces} (trace-correlated logging), giving on-call and engineering teams direct log-to-trace visibility during incidents and significantly improving debugging speed.
+\end{bullets}
+\sectionsep
+
+\resumeHeading{Zintlr}{SDE Intern}{Bangalore, KA}{Jan 2025 - July 2025}
+\begin{bullets}
+
+    \item Designed and implemented \textbf{rate limiting middleware}, built \textbf{5 real-time analytics dashboards} with dynamic filters, and \textbf{optimized API efficiency} by consolidating multiple client calls into a single request (reducing network overhead by up to 90\%), while enhancing SEO visibility and maintaining core admin panel functionality.
+
+\end{bullets}
+% \sectionsep
+% \resumeHeading{Bhilai Steel Plant, SAIL}{IT Internship}{Bhilai, CG}{May 2024 - July 2024}
+% \begin{bullets}
+%     \item Resolved initial system bugs, including API formatting, significantly improving the stability and performance of the application. \\
+
+%     \item Designed and implemented an end-to-end \textbf{database architecture} for the attendance system, ensuring optimal data storage, retrieval efficiency, and system scalability.
+%     \\
+
+%     \item Developed and integrated comprehensive \textbf{RESTful APIs} for the \textbf{Admin Panel}, enabling seamless backend-frontend integration to support core attendance system functionalities such as clock-in/out, shift tracking, and leave management, while allowing administrators to efficiently manage and monitor employee data.\
+
+    
+%     \item Engineered and scheduled \textbf{Cron jobs} using \textbf{Celery} to monitor user activity, automatically identifying and notifying relevant stakeholders when users fail to punch out at the end of their shift. \\
+
+%     \item Developed APIs for the \textbf{Admin Panel}, enabling seamless integration between the backend and the user interface, allowing administrators to efficiently manage and monitor employee attendance data.\\
+    
+%    \item Developed and integrated comprehensive \textbf{RESTful APIs} for the \textbf{Admin Panel}, powering attendance system functionalities such as clock-in/out, shift tracking, and leave management, while engineering \textbf{Celery-based Cron jobs} to monitor user activity and send automated notifications, ultimately improving clock-in/out accuracy and reducing employee work hour discrepancies by \textbf{2–3 hours}.\
+
+    
+% \end{bullets}
+% \sectionsep
+
+% \resumeHeading{TechHub}{Web Development Mentor}{Bangalore, KA}{Jul 2023 - Oct 2023}
+% \begin{bullets}
+%     \item \textbf{Guided} participants in \textbf{backend development}, focusing on Django, API integration, and database management. \\
+
+%     \item Partnered with TechHub to develop an interactive learning environment that \textbf{increased student engagement.}
+%     \\
+
+%     \item Mentored participants in utilizing version control systems like Git and collaboration platforms like GitHub, leading to a \textbf{increase in team productivity} and smoother project management.
+%     \\
+
+% \end{bullets}
+% \sectionsep
+
+% \resumeHeading{Major League Hacking}{WildHacks - II}{Bangalore, KA}{Aug 2022}
+% \begin{bullets}
+%     \item Developed a platform dedicated to helping stray animals find homes. \\
+
+%     \item Users can upload photos, descriptions, and locations of stray animals they encounter.
+%     \\
+
+%     \item Adopters can browse our detailed database of stray animals, with each profile offering comprehensive information to help find a pet that fits their preferences and lifestyle.
+%     \\
+
+% \end{bullets}
+% \sectionsep
+
+
+
+
+
+%--------------------------------------------------------------
+%     Projects
+%--------------------------------------------------------------
+\section{Projects}
+
+% \projectHeading{Social Media API}{https://github.com/yashd24/Social_Network_API}{Django, PostgreSQL}
+% \begin{bullets}
+%     \item Utilized Django Rest Framework (DRF) to implement \textbf{JWT authentication}, ensuring secure \& stateless sessions.\\
+%  % \item Built a friend request system enabling users to send, receive, reject requests, \& view detailed friend lists.\\
+% \item Integrated \textbf{throttling} to restrict friend requests to three per minute, ensuring fair usage of the system.\\
+
+% \end{bullets}
+% \sectionsep
+
+\projectHeading{Zquencer - Multi-step Outreach Sequencer}{}{Django, MongoDB, Celery, OpenAI}
+\begin{bullets}
+\item Built a Django/MongoDB system enabling users to create timed, multi-step outreach sequences sent from their own mailbox (Microsoft 365/Gmail via OAuth), with template personalization, Celery-based scheduling, and AI-powered reply monitoring (via OpenAI) that classifies prospect sentiment/intent and auto-updates engagement scores end-to-end.\\
+\end{bullets}
+
+\projectHeading{Partner API Generator Agent}{}{AI Agent}
+\begin{bullets}
+\item Built an internal AI agent that automatically generates new customer-facing data APIs end-to-end --- cutting per-API development time from 1--2 days to under 1 hour, now used by the team to accelerate delivery of new APIs to clients.\\
+\end{bullets}
+
+\sectionsep
+% \sectionsep
+
+% \projectHeading{Email Scheduler}{https://github.com/yashd24/Email_Scheduler}{Django, PostgreSQL, Celery, Redis}
+% \begin{bullets}
+
+% \item Implemented Celery for background task management, enabling automated scheduling and delivery of email notifications.\\
+% \item Optimized performance by configuring Celery with Redis for efficient message brokering and task queue management.\\
+%  \item Integrated JWT authentication to ensure secure user access and session management within the application.\\
+
+% \end{bullets}
+% \sectionsep
+% 
+
+
+% \projectHeading{Wikipedia Clone}{https://github.com/yashd24/Basic_Wikipedia_Clone.git}{Django, SQLite}
+% \begin{bullets}
+
+%     \item Led the development of a Python-based Wikipedia Clone utilizing Django, HTML, and SQLite.\\
+
+% \item Implemented essential features, enabling users to create, search, and read articles from the database.\\
+
+
+% \end{bullets}
+% \sectionsep
+% \sectionsep
+
+%--------------------------------------------------------------
+%     Co-Curricular
+%--------------------------------------------------------------
+
+% \section{Co-Curricular}
+
+% \begin{bullets}
+%     \item \textbf{Student Coordinator, Quillz (Dec 2022 – Dec 2023):} Organized and managed quiz events, fostering teamwork and boosting engagement through diverse formats and smooth event execution.
+
+%     \item \textbf{WildHacks II, Major League Hacking (Aug 2022):} Built a platform to help stray animals find homes, enabling photo uploads, location tagging, and detailed animal profiles for adopters.
+% \end{bullets}
+
+
+% Example using bullets and dates 
+% \projectHeadingWithDate{Hogwart\textquotesingle{}s Library Management System}{https://github.com/Aarif123456/hogwartslibrary}{PHP, JavaScript, HTML, CSS, MySQL}{Aug 2019}
+% \begin{bullets}
+    % \item A full-stack library management system, where users can manage books and holds on their accounts. Users can search the library\textquotesingle{}s catalogue, which has every book mentioned in the Harry Potter series. The system distinguishes between 4 users. For examples, librarians who can also check or return books on behalf of users.\\
+% \end{bullets}
+% \sectionsep
+  
+
+
+% A more concise alternate 
+% \begin{skillList}
+%     \doubleItem{Languages:}{Java, C++, Python, C\#, PHP, Prolog, Bash, C, Racket}%
+%     {Databases:}{SQL, MongoDB, Neo4j, DynamoDB}
+%     \\
+%     \doubleItem{Web Development:}{JavaScript, TypeScript, React, HTML/CSS}
+%     {Technology:}{Git, AWS, GCP, Azure, Docker, \LaTeX}%
+% \end{skillList}
+\end{document}

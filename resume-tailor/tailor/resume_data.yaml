@@ -1,0 +1,252 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# Yashdeep Sahu — resume content bank
+#
+# This is the single source of truth. Edit content HERE, not in the .tex.
+# Text is LaTeX (keep \textbf{}, \%, \& as-is).
+#
+#   default: true   → appears on the untailored base resume
+#   required: true  → the entry always appears (tailoring cannot drop it)
+#   conflicts_with  → bullets that say the same thing; never shown together
+#
+# Company names, titles, dates, education and contact details are NEVER sent
+# to the LLM for editing — only bullet text is eligible for keyword insertion.
+# ─────────────────────────────────────────────────────────────────────────────
+
+name: Yashdeep Sahu
+email: yashdeepsahu2406@gmail.com
+phone: "+91 8770779761"
+linkedin: yashdeep-sahu
+github: yashd24
+
+education:
+  degree: B.E. in Computer Science and Engineering
+  institute: Sir M Visvesvaraya Institute Of Technology
+  location: Bangalore, KA
+  date: Jun 2025
+  cgpa: "8.5"
+
+# Skills can only be REORDERED within each line. Nothing is ever added.
+skills:
+  - label: "Languages:"
+    items: [Python, Java, SQL]
+  - label: "Frameworks/Tools:"
+    items: [Django, DRF, Celery, Docker, Git/GitHub, Redis, RabbitMQ, Postman]
+  - label: "Databases:"
+    items: [PostgreSQL, MongoDB]
+  - label: "Cloud \\& AI:"
+    items: [AWS, Elasticsearch (ELK), OpenAI API]
+
+experience:
+  - id: zintlr_asde
+    required: true
+    company: Zintlr
+    position: Associate Software Development Engineer
+    location: Bangalore, KA
+    dates: Aug 2025 - Present
+    bullets:
+      - id: z_partner_api
+        default: true
+        conflicts_with: [z_client_contact, z_release_planning]
+        text: >-
+          Led the \textbf{B2B2B partner API platform} (\textbf{80,000+ API calls/week}) --- owning release planning, delegating work across a team of 2 developers, and driving client communications and issue resolution as the primary point of contact.
+      - id: z_lead_scoring
+        default: true
+        text: >-
+          Built an \textbf{AI-powered lead scoring pipeline} using \textbf{OpenAI} on the signup flow --- enriches signups with company segmentation, ICP/BANT qualification, competitor detection, and a \textbf{0--100 lead score} pushed to HubSpot, helping the sales team filter out fake signups and prioritize which prospects to pursue.
+      - id: z_aws_marketplace
+        default: true
+        text: >-
+          Led \textbf{AWS Marketplace} technical setup --- repository structuring, deployment execution, and integration readiness --- successfully listing Zintlr's product on AWS Marketplace; coordinated with AWS team to resolve critical blockers.
+      - id: z_vapt
+        default: true
+        text: >-
+          Led \textbf{VAPT compliance renewal} by creating automated Postman collections and security testing scripts for \textbf{250+ APIs}, resolving vulnerabilities and ensuring adherence to \textbf{GDPR, SOC 2, and ISO} compliance standards.
+      - id: z_nudges
+        default: true
+        text: >-
+          Contributed to the system design and architectural planning of the \textbf{Nudges system}, shaping infrastructure-level decisions for a scalable notification workflow.
+      - id: z_domain_block
+        default: true
+        text: >-
+          Implemented a robust \textbf{domain-level block/unblock system} allowing administrators to restrict or restore access across \textbf{1,000+ domains} --- reducing fake signups by enabling manual blocking of fraudulent domains.
+      - id: z_payment
+        default: true
+        text: >-
+          Automated the \textbf{subscription payment workflow}, removing the sales team's dependency on the accounts team for payment link generation --- sales can now generate a Stripe payment link directly from the admin panel and the subscription activates automatically on payment success.
+      - id: z_elk_apm
+        default: true
+        text: >-
+          Enhanced the in-house \textbf{ELK logging stack} by wiring individual log entries to their corresponding \textbf{APM traces} (trace-correlated logging), giving on-call and engineering teams direct log-to-trace visibility during incidents and significantly improving debugging speed.
+      # ── previously commented out ──
+      - id: z_client_contact
+        default: false
+        conflicts_with: [z_partner_api]
+        text: >-
+          Acted as a point of contact between internal teams and clients, driving clear communication and reducing ambiguity during feature development and releases.
+      - id: z_release_planning
+        default: false
+        conflicts_with: [z_partner_api]
+        text: >-
+          Owned end-to-end release planning and coordination, ensuring timely deployments and alignment with business priorities.
+      - id: z_subscription_lifecycle
+        default: false
+        text: >-
+          Enhanced \textbf{subscription lifecycle management} including LTD/churned/expired segmentation, churn workflows, user exports, and limit logging --- improving admin control, observability, and analytics capabilities.
+
+  - id: zintlr_intern
+    required: true
+    company: Zintlr
+    position: SDE Intern
+    location: Bangalore, KA
+    dates: Jan 2025 - July 2025
+    bullets:
+      - id: zi_rate_limit_dashboards
+        default: true
+        text: >-
+          Designed and implemented \textbf{rate limiting middleware}, built \textbf{5 real-time analytics dashboards} with dynamic filters, and \textbf{optimized API efficiency} by consolidating multiple client calls into a single request (reducing network overhead by up to 90\%), while enhancing SEO visibility and maintaining core admin panel functionality.
+
+  # ── previously commented out ──
+  - id: sail
+    required: false
+    company: Bhilai Steel Plant, SAIL
+    position: IT Internship
+    location: Bhilai, CG
+    dates: May 2024 - July 2024
+    bullets:
+      - id: sail_bugs
+        default: true
+        text: >-
+          Resolved initial system bugs, including API formatting, significantly improving the stability and performance of the application.
+      - id: sail_db
+        default: true
+        text: >-
+          Designed and implemented an end-to-end \textbf{database architecture} for the attendance system, ensuring optimal data storage, retrieval efficiency, and system scalability.
+      - id: sail_combined
+        default: false
+        conflicts_with: [sail_rest_apis, sail_cron, sail_admin_apis]
+        text: >-
+          Developed and integrated comprehensive \textbf{RESTful APIs} for the \textbf{Admin Panel}, powering attendance system functionalities such as clock-in/out, shift tracking, and leave management, while engineering \textbf{Celery-based Cron jobs} to monitor user activity and send automated notifications, ultimately improving clock-in/out accuracy and reducing employee work hour discrepancies by \textbf{2--3 hours}.
+      - id: sail_rest_apis
+        default: true
+        conflicts_with: [sail_combined, sail_admin_apis]
+        text: >-
+          Developed and integrated comprehensive \textbf{RESTful APIs} for the \textbf{Admin Panel}, enabling seamless backend-frontend integration to support core attendance system functionalities such as clock-in/out, shift tracking, and leave management, while allowing administrators to efficiently manage and monitor employee data.
+      - id: sail_cron
+        default: true
+        conflicts_with: [sail_combined]
+        text: >-
+          Engineered and scheduled \textbf{Cron jobs} using \textbf{Celery} to monitor user activity, automatically identifying and notifying relevant stakeholders when users fail to punch out at the end of their shift.
+      - id: sail_admin_apis
+        default: false
+        conflicts_with: [sail_combined, sail_rest_apis]
+        text: >-
+          Developed APIs for the \textbf{Admin Panel}, enabling seamless integration between the backend and the user interface, allowing administrators to efficiently manage and monitor employee attendance data.
+
+  - id: techhub
+    required: false
+    company: TechHub
+    position: Web Development Mentor
+    location: Bangalore, KA
+    dates: Jul 2023 - Oct 2023
+    bullets:
+      - id: th_guided
+        default: true
+        text: >-
+          \textbf{Guided} participants in \textbf{backend development}, focusing on Django, API integration, and database management.
+      - id: th_environment
+        default: true
+        text: >-
+          Partnered with TechHub to develop an interactive learning environment that \textbf{increased student engagement.}
+      - id: th_git
+        default: true
+        text: >-
+          Mentored participants in utilizing version control systems like Git and collaboration platforms like GitHub, leading to a \textbf{increase in team productivity} and smoother project management.
+
+projects:
+  - id: zquencer
+    default: true
+    name: Zquencer - Multi-step Outreach Sequencer
+    link: ""
+    stack: Django, MongoDB, Celery, OpenAI
+    bullets:
+      - id: zq_main
+        default: true
+        text: >-
+          Built a Django/MongoDB system enabling users to create timed, multi-step outreach sequences sent from their own mailbox (Microsoft 365/Gmail via OAuth), with template personalization, Celery-based scheduling, and AI-powered reply monitoring (via OpenAI) that classifies prospect sentiment/intent and auto-updates engagement scores end-to-end.
+
+  - id: partner_agent
+    default: true
+    name: Partner API Generator Agent
+    link: ""
+    stack: AI Agent
+    bullets:
+      - id: pa_main
+        default: true
+        text: >-
+          Built an internal AI agent that automatically generates new customer-facing data APIs end-to-end --- cutting per-API development time from 1--2 days to under 1 hour, now used by the team to accelerate delivery of new APIs to clients.
+
+  # ── previously commented out ──
+  - id: social_media_api
+    default: false
+    name: Social Media API
+    link: https://github.com/yashd24/Social_Network_API
+    stack: Django, PostgreSQL
+    bullets:
+      - id: sm_jwt
+        default: true
+        text: >-
+          Utilized Django Rest Framework (DRF) to implement \textbf{JWT authentication}, ensuring secure \& stateless sessions.
+      - id: sm_friends
+        default: false
+        text: >-
+          Built a friend request system enabling users to send, receive, reject requests, \& view detailed friend lists.
+      - id: sm_throttle
+        default: true
+        text: >-
+          Integrated \textbf{throttling} to restrict friend requests to three per minute, ensuring fair usage of the system.
+
+  - id: email_scheduler
+    default: false
+    name: Email Scheduler
+    link: https://github.com/yashd24/Email_Scheduler
+    stack: Django, PostgreSQL, Celery, Redis
+    bullets:
+      - id: es_celery
+        default: true
+        text: >-
+          Implemented Celery for background task management, enabling automated scheduling and delivery of email notifications.
+      - id: es_redis
+        default: true
+        text: >-
+          Optimized performance by configuring Celery with Redis for efficient message brokering and task queue management.
+      - id: es_jwt
+        default: true
+        text: >-
+          Integrated JWT authentication to ensure secure user access and session management within the application.
+
+  - id: wikipedia_clone
+    default: false
+    name: Wikipedia Clone
+    link: https://github.com/yashd24/Basic_Wikipedia_Clone.git
+    stack: Django, SQLite
+    bullets:
+      - id: wc_led
+        default: true
+        text: >-
+          Led the development of a Python-based Wikipedia Clone utilizing Django, HTML, and SQLite.
+      - id: wc_features
+        default: true
+        text: >-
+          Implemented essential features, enabling users to create, search, and read articles from the database.
+
+# Optional section. Your WildHacks work appeared twice in the original file
+# (as an experience entry and as a co-curricular line); it lives here only.
+cocurricular:
+  - id: cc_quillz
+    default: false
+    text: >-
+      \textbf{Student Coordinator, Quillz (Dec 2022 -- Dec 2023):} Organized and managed quiz events, fostering teamwork and boosting engagement through diverse formats and smooth event execution.
+  - id: cc_wildhacks
+    default: false
+    text: >-
+      \textbf{WildHacks II, Major League Hacking (Aug 2022):} Built a platform to help stray animals find homes, enabling photo uploads, location tagging, and detailed animal profiles for adopters.
