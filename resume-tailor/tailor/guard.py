@@ -75,7 +75,7 @@ _TECH_SYMBOLS = re.compile(r"[/.+#]")
 KNOWN_TECH = frozenset("""
 python java javascript typescript kotlin scala golang rust ruby php perl csharp dotnet bash powershell
 sql nosql plsql graphql grpc protobuf thrift soap openapi swagger
-django flask fastapi tornado celery spring springboot hibernate rails laravel nodejs react angular vue
+django drf flask fastapi tornado celery spring springboot hibernate rails laravel nodejs react angular vue
 nextjs nuxt svelte jquery redux webpack
 postgresql mysql mariadb sqlite oracle mssql mongodb dynamodb cassandra couchbase redis memcached
 elasticsearch opensearch solr lucene neo4j influxdb timescaledb clickhouse snowflake bigquery redshift
@@ -99,7 +99,7 @@ postman insomnia figma
 ALIASES = {
     "postgres": "postgresql", "psql": "postgresql", "postgre": "postgresql",
     "k8s": "kubernetes", "kube": "kubernetes", "gke": "kubernetes", "aks": "kubernetes",
-    "mongo": "mongodb", "dynamo": "dynamodb", "elastic": "elasticsearch",
+    "mongo": "mongodb", "dynamo": "dynamodb", "elastic": "elasticsearch", "elk": "elasticsearch",
     "js": "javascript", "ts": "typescript", "node": "nodejs", "node.js": "nodejs", "golang": "go",
     "reactjs": "react", "react.js": "react", "vuejs": "vue", "vue.js": "vue", "next.js": "nextjs",
     "angularjs": "angular", "c#": "csharp", ".net": "dotnet",

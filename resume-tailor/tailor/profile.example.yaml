@@ -33,6 +33,7 @@ compensation:                          # only ever used from here, never estimat
     stated_total_includes: TODO        # e.g. what the total includes beyond fixed + variable
     report_as: TODO                    # which figure forms get: fixed | fixed_plus_variable | stated_total
   expected_ctc_inr_lpa: TODO           # a single number
+  expected_fixed_ctc_lpa: TODO         # optional: your expected FIXED / base part, used for "fixed/base salary" questions
   # Only INR. On non-Indian forms salary questions are flagged; current CTC is filled only if required.
 
 work_authorization:                    # per country; countries not listed use default_other (flagged while it is TODO)
@@ -63,6 +64,10 @@ eeo:                                   # sensitive: matched to a form's options 
   veteran_status: TODO
   disability_status: TODO
   if_no_matching_option: TODO          # decline | flag - what to do when no option fits
+
+skill_years:                           # optional: YOUR OWN years per tool, for "years with <tool>" questions.
+  python: TODO                         # A tool that is not listed here is flagged, never estimated.
+  # django: TODO                       # Numbers like 1.5. Aliases work (postgres = postgresql).
 
 custom_answers: {}                     # reusable answers you write or approve yourself
 # "how did you hear" is not stored: it is derived from the platform the job came from.

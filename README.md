@@ -15,10 +15,12 @@ The full design, rules and milestone checks live in [`plan.md`](plan.md). This f
 | M0 | Verified on Windows (MiKTeX, real `claude -p`) | done |
 | M1 | `profile.yaml` + fill-time answers (experience, notice, salary, EEO, education...) | done |
 | M2 | Intake: Greenhouse / Lever URL -> job data + form questions | done |
-| M3 | Browser session (Playwright, persistent profile, screenshots, pause/resume) | built; pause/resume check on your terminal pending |
-| M4-M8 | Field discovery + answering, cover letters, ATS adapters + modes, verification, tracker, polish | not started |
+| M3 | Browser session (Playwright, persistent profile, screenshots, pause/resume) | done |
+| M4 | Field discovery, answer pipeline, cover letters, dry-run form filling | done |
+| M5 | Greenhouse + Lever adapters, dry-run / assist / auto modes | built; 4 Greenhouse + 3 Lever dry runs clean; real submissions await your per-job approval |
+| M6-M8 | Verification fixtures, tracker (SQLite + Sheets), polish | not started |
 
-Nothing in this repo submits an application yet.
+`apply.py` is a dry run unless you explicitly approve a specific job (see below); nothing submits by default.
 
 ## Layout
 
@@ -37,6 +39,13 @@ profile.yaml         your real answers (gitignored, never committed)
 jobbot/profile.py    load/validate the profile; fill-time answers
 jobbot/intake.py     job URL -> Job (platform, JD, questions)
 jobbot/browser.py    Playwright browser session
+jobbot/fields.py     discover a form's fields (labels, types, options) from the live page
+jobbot/ats/          Greenhouse / Lever adapters (open, discover, fill, submit, confirm)
+jobbot/config.py     config.yaml: the mode per platform (config.example.yaml)
+jobbot/answers.py    field -> answer with a source; sensitive fields never reach the LLM
+jobbot/filler.py     fill the form; blocks every submit (dry run)
+jobbot/coverletter.py  guarded cover letters (text + one-page PDF)
+apply.py             dry-run a Greenhouse/Lever application: python apply.py --url <job url>
 tests/               unittest suites + saved fixtures (tests/fixtures/)
 output/              per-job folders, screenshots (gitignored)
 browser_profile/     the automation browser's logins/cookies (gitignored)
@@ -110,6 +119,27 @@ python -m jobbot.browser <url> [<url> ...]
 Opens the automation browser (its own persistent profile, so logins survive), screenshots each page into the
 job folder, and demonstrates pause/resume. Only one run can use the browser profile at a time. There is no
 stealth, fingerprint spoofing or CAPTCHA solving: when a CAPTCHA, 2FA or anything else needs a human, it pauses.
+
+## Apply (dry run by default)
+
+```
+python apply.py --url <greenhouse-or-lever-job-url>                       # dry run: fills, screenshots, never submits
+python apply.py --url <job-url> --mode assist --allow-submit <job-url>    # fills, waits while YOU click Submit, verifies
+python apply.py --url <job-url> --mode auto   --allow-submit <job-url>    # submits itself (see below)
+```
+
+Reads the job, tailors the resume (`--resume-pdf` reuses one), opens the form, answers every field (profile first,
+the LLM only for non-sensitive questions), fills it, and outlines what is left for you. The job folder gets
+`screenshots/`, `answers.json` (every answer with its source and status) and `apply_result.json` (the outcome).
+
+- **dry-run** is the default and what `--dry-run` forces. The browser also blocks every submit event and click.
+- **assist** fills, highlights the fields in orange that are yours, then pauses; you click Submit; it verifies.
+- **auto** fills, and submits only if every required field is filled and nothing is flagged; otherwise (or if a
+  CAPTCHA / security-code challenge is actually visible) it switches to assist and says why. A challenge is handed
+  to you, never solved. Statuses: `dry_run`, `submitted` (a confirmation was seen), `needs_review`, `failed`.
+- **Approval is per job:** a real mode submits only if `--allow-submit` equals that job's canonical URL. Without
+  it, or with a different URL, the run is downgraded to a dry run and says so. `config.yaml` (copy of
+  `config.example.yaml`) sets the default mode per platform; with no config everything is a dry run.
 
 ## Tests
 

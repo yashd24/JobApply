@@ -147,6 +147,62 @@ def eeo_prof(**overrides):
     return p
 
 
+class FixedCtcAndSkillYears(unittest.TestCase):
+    def test_example_has_the_new_optional_fields_as_todo_and_stays_valid(self):
+        self.assertEqual(EXAMPLE["compensation"]["expected_fixed_ctc_lpa"], "TODO")
+        self.assertEqual(EXAMPLE["skill_years"]["python"], "TODO")
+        P.validate(copy.deepcopy(EXAMPLE))
+
+    def test_they_are_optional_in_a_real_profile(self):
+        p = comp_prof()
+        p.pop("skill_years")                                   # a profile may simply not have the section
+        self.assertNotIn("expected_fixed_ctc_lpa", p["compensation"])
+        P.validate(p)
+        self.assertIsNone(P.expected_fixed_ctc_lpa(p))
+        self.assertIsNone(P.skill_years_for(p, "python"))
+
+    def test_validation_of_the_new_fields(self):
+        for bad in ({"expected_fixed_ctc_lpa": "12 LPA"}, {"expected_fixed_ctc_lpa": -3}, {"expected_fixed_ctc_lpa": True}):
+            p = comp_prof()
+            p["compensation"].update(bad)
+            with self.assertRaises(P.ProfileError, msg=bad):
+                P.validate(p)
+        for bad in ({"python": "a lot"}, {"python": -1}, {"python": 80}, {"python": True}):
+            p = comp_prof()
+            p["skill_years"] = bad
+            with self.assertRaises(P.ProfileError, msg=bad):
+                P.validate(p)
+        p = comp_prof()
+        p["skill_years"] = ["python"]
+        with self.assertRaises(P.ProfileError):
+            P.validate(p)
+        p = comp_prof()
+        p["compensation"]["expected_fixed_ctc_lpa"] = 11.5
+        p["skill_years"] = {"python": 1.5, "django": "TODO"}
+        P.validate(p)
+        self.assertEqual(P.expected_fixed_ctc_lpa(p), 11.5)
+
+    def test_skill_years_lookup_uses_aliases_and_ignores_todo(self):
+        p = comp_prof()
+        p["skill_years"] = {"PostgreSQL": 1.2, "k8s": 0.5, "django": "TODO"}
+        self.assertEqual(P.skill_years_for(p, "postgres"), 1.2)
+        self.assertEqual(P.skill_years_for(p, "Kubernetes"), 0.5)
+        self.assertIsNone(P.skill_years_for(p, "django"))                  # TODO is "not provided"
+        self.assertIsNone(P.skill_years_for(p, "kafka"))
+
+    def test_current_fixed_ctc_and_year_ranges(self):
+        self.assertEqual(P.current_fixed_ctc_lpa(comp_prof()), 5.0)
+        self.assertEqual(P.option_for_years(["0-1 years", "1-3 years", "3+"], 1.5), "1-3 years")
+        self.assertEqual(P.option_for_years(["0-1 years", "1-3 years", "3+"], 4), "3+")
+        self.assertIsNone(P.option_for_years(["5+"], 1.5))
+
+    def test_a_specific_lpa_figure_bypasses_the_total_and_its_breakup(self):
+        p = comp_prof()
+        self.assertEqual(P.salary_answer(p, "current", "India", free_text=True, lpa=5.0), ("fill", "5 LPA"))
+        self.assertEqual(P.salary_answer(p, "expected", "India", free_text=True, lpa=12.0), ("fill", "12 LPA (negotiable)"))
+        self.assertEqual(P.salary_answer(p, "expected", "Germany", lpa=12.0), ("flag", None))
+
+
 class Eeo(unittest.TestCase):
     DECLINE = "Decline to self-identify"
 
@@ -264,7 +320,11 @@ class Notice(unittest.TestCase):
 
     def test_free_text(self):
         self.assertEqual(P.notice_period_answer(prof(), self.TODAY),
-                         "Serving notice, last working day 2030-08-20")
+                         "Serving notice, last working day 20 Aug 2030")
+
+    def test_human_date_style(self):
+        self.assertEqual(P.human_date(D(2026, 10, 13)), "13 Oct 2026")
+        self.assertEqual(P.human_date(D(2030, 1, 5)), "5 Jan 2030")          # no leading zero on the day
 
     def test_options_prefer_the_stored_notice_period(self):
         self.assertEqual(P.notice_period_answer(prof(), self.TODAY, options=["Immediate", "20 days", "45 days"]),
@@ -277,7 +337,8 @@ class Notice(unittest.TestCase):
 
     def test_serving_notice_and_last_working_day(self):
         self.assertEqual(P.serving_notice_answer(prof(), self.TODAY), "Yes")
-        self.assertEqual(P.last_working_day_answer(prof(), self.TODAY), "2030-08-20")
+        self.assertEqual(P.last_working_day_answer(prof(), self.TODAY), "20 Aug 2030")
+        self.assertEqual(P.last_working_day_answer(prof(), self.TODAY, iso=True), "2030-08-20")   # for date inputs
         self.assertEqual(P.serving_notice_answer(prof(serving_notice=False), self.TODAY), "No")
 
     def test_after_last_working_day_notice_questions_are_flagged(self):
@@ -346,8 +407,10 @@ class Salary(unittest.TestCase):
 
 class StartDateAndEmployment(unittest.TestCase):
     def test_earliest_start_then_immediately(self):
-        self.assertEqual(P.earliest_start_answer(prof(), D(2030, 7, 15)), "2030-08-26")
-        self.assertEqual(P.earliest_start_answer(prof(), D(2030, 8, 25)), "2030-08-26")
+        self.assertEqual(P.earliest_start_answer(prof(), D(2030, 7, 15)), "26 Aug 2030")
+        self.assertEqual(P.earliest_start_answer(prof(), D(2030, 7, 15), iso=True), "2030-08-26")
+        self.assertEqual(P.earliest_start_answer(prof(), D(2030, 8, 25)), "26 Aug 2030")
+        self.assertEqual(P.earliest_start_answer(prof(), D(2030, 8, 26), iso=True), "Immediately")
         self.assertEqual(P.earliest_start_answer(prof(), D(2030, 8, 26)), "Immediately")
         self.assertEqual(P.earliest_start_answer(prof(), D(2031, 1, 1)), "Immediately")
 

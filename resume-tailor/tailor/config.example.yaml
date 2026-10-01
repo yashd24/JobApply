@@ -1,0 +1,18 @@
+# Copy to config.yaml (gitignored) and edit. Nothing here is a secret, but it is yours to tune.
+#
+# mode per platform:
+#   dry-run  fill the form, screenshot, NEVER submit (the default while developing)
+#   assist   fill everything, highlight what is left for you, then wait while YOU click Submit
+#   auto     fill and submit without you; falls back to assist if any required field is empty or flagged,
+#            or if a CAPTCHA / security-code challenge is actually visible
+#
+# A real submission (assist or auto) ALSO needs `--allow-submit <the job's canonical URL>` on the command line:
+# approval is per job, so a forgotten flag or a pasted wrong URL can only ever produce a dry run.
+default_mode: dry-run
+
+platforms:
+  greenhouse: {mode: assist}
+  lever: {mode: assist}
+  linkedin: {mode: assist}       # not supported yet; assist stays the default for LinkedIn and Naukri
+  naukri: {mode: assist}
+  indeed: {mode: assist}

@@ -1,0 +1,21 @@
+# Copy to writing_samples.txt (gitignored) and paste 2-3 real messages you wrote, e.g. a past cover note or
+# a referral request. They are used for TONE ONLY: sentence length, politeness, word choice, how you close.
+# Facts never come from them; they come from your visible resume content. They may name real people, which
+# is why the real file is not committed. Samples are separated by lines starting with "=== Sample".
+# The two below are made up.
+
+=== Sample 1 (note to a hiring contact) ===
+Hi Priya,
+
+I'm Test User, a backend engineer. I saw the Platform Engineer opening at Example Corp and would love to apply.
+I have attached my resume. Could you point me to the right person to talk to?
+
+Thank you for your time!
+
+=== Sample 2 (referral request) ===
+Hi Sam,
+
+I would love to apply for the Data Engineer role at Sample Ltd. It would be great if you could refer me.
+My resume is attached.
+
+Thank you!

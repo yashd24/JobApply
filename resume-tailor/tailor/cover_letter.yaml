@@ -1,0 +1,52 @@
+# Cover-letter settings (committed: nothing personal here). Edit freely.
+# Used by the cover-letter generator (M4) and its guard. Facts never come from writing_samples.txt.
+
+length:
+  words_min: 150
+  words_max: 250
+  paragraphs: 3
+
+# Tone comes from writing_samples.txt (gitignored). These rules tell the prompt how to use it.
+style_rules:
+  - "Match the tone of the writing samples: short sentences, polite and direct, plain words."
+  - "Phrases like \"I would love to\" are welcome. Close with a simple thank-you."
+  - "Take TONE ONLY from the samples. Never take facts from them; they are outdated (for example 'recent graduate', or skills no longer listed). Facts come only from the visible resume content."
+  - "Do not copy the samples' weaker habits: no long lists of technologies (pick 1-2 concrete achievements with their real numbers instead) and no generic openers."
+  - "Connect 1-2 specific JD requirements to 1-2 concrete things from the visible resume bullets. Mention the company only using facts from the JD."
+
+# Each letter gets a different style of closing (the one used in the last few letters is skipped), so letters
+# sent to different companies do not all end the same way. Edit or add styles freely.
+closing_styles:
+  - "Offer to share more detail about one of the projects you described, then thank them for reading."
+  - "Say you would be glad to talk it through on a call, then thank them for their time."
+  - "Say your resume is attached for reference, then thank them."
+  - "Say you look forward to hearing from them, then thank them."
+  - "Offer to answer any questions about your experience, then thank them for considering your application."
+  - "Name one thing from the job description you would like to discuss in an interview, then thank them."
+  - "Keep it very short: one sentence of interest in the next steps, then a plain thank you."
+  - "Say you would love to hear more about what the team is working on, then thank them for reading."
+
+# Case-insensitive; a letter containing any of these fails the guard and is regenerated once.
+banned_phrases:
+  - "I am writing to express"
+  - "I'm writing to express"
+  - "I hope you're doing well"
+  - "I hope you are doing well"
+  - "I hope this email finds you well"
+  - "I hope this finds you well"
+  - "passionate"
+  - "thrilled"
+  - "leverage"
+  - "dynamic team"
+  - "great fit"
+  - "perfect fit"
+  - "team player"
+  - "hit the ground running"
+  - "results-driven"
+  - "detail-oriented"
+  - "cutting-edge"
+  - "state-of-the-art"
+  - "synergy"
+  - "go-getter"
+  - "for your time and consideration"            # appeared in every sample letter: sounds like a template
+  - "how this experience could help"

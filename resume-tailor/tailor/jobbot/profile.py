@@ -202,6 +202,17 @@ def validate(profile: Any) -> dict:
         exp = comp.get("expected_ctc_inr_lpa")
         if exp is not None and exp != TODO and not _is_number(exp):
             problems.append("compensation.expected_ctc_inr_lpa must be a number or TODO")
+        fx = comp.get("expected_fixed_ctc_lpa")        # optional: absent / TODO means "ask the user"
+        if fx is not None and fx != TODO and not (_is_number(fx) and fx > 0):
+            problems.append("compensation.expected_fixed_ctc_lpa must be a positive number or TODO")
+    sy = profile.get("skill_years")                    # optional section: tool -> years of the user's own
+    if sy is not None:
+        if not isinstance(sy, dict):
+            problems.append("skill_years must be a mapping of tool -> years")
+        else:
+            for tool, years in sy.items():
+                if years != TODO and not (_is_number(years) and 0 <= years <= 60):
+                    problems.append(f"skill_years.{tool} must be a number of years (0-60) or TODO")
     if problems:
         raise ProfileError("; ".join(problems))
     return profile
@@ -325,7 +336,11 @@ def experience_for_options(profile: dict, options: list[str], today: date | None
                            include_internship: bool = True) -> str | None:
     """The dropdown option whose range contains the computed years, or None (flag)
     when no option or more than one option matches."""
-    years = experience_years(profile, today, include_internship=include_internship)
+    return option_for_years(options, experience_years(profile, today, include_internship=include_internship))
+
+
+def option_for_years(options: list[str], years: float) -> str | None:
+    """The dropdown option ('1-3 years', '3+', 'Less than 1') whose range contains `years`, else None."""
     hits: list[tuple[str, tuple[float, float | None]]] = []
     for opt in options:
         r = _year_range(opt)
@@ -360,10 +375,11 @@ def is_serving_notice(profile: dict, today: date | None = None) -> bool | None:
     return True if today <= lwd else None
 
 
-def last_working_day_answer(profile: dict, today: date | None = None) -> str | None:
+def last_working_day_answer(profile: dict, today: date | None = None, *, iso: bool = False) -> str | None:
     if is_serving_notice(profile, today) is not True:
         return None
-    return _day(profile["employment"]["last_working_day"]).isoformat()
+    d = _day(profile["employment"]["last_working_day"])
+    return d.isoformat() if iso else human_date(d)
 
 
 def serving_notice_answer(profile: dict, today: date | None = None) -> str | None:
@@ -381,7 +397,7 @@ def notice_period_answer(profile: dict, today: date | None = None, *,
     e = _emp(profile, ["notice_period_days", "last_working_day"])
     lwd = _day(e["last_working_day"])
     if options is None:
-        return f"Serving notice, last working day {lwd.isoformat()}"
+        return f"Serving notice, last working day {human_date(lwd)}"
     parsed = [(o, _notice_days(o)) for o in options]
     parsed = [(o, p) for o, p in parsed if p]
     for o, (days, is_range) in parsed:
@@ -392,11 +408,19 @@ def notice_period_answer(profile: dict, today: date | None = None, *,
     return covering[0][1] if covering else None
 
 
-def earliest_start_answer(profile: dict, today: date | None = None) -> str:
-    """The stored date while it is in the future, otherwise 'Immediately'."""
+def human_date(d: date) -> str:
+    """13 Oct 2026 (no leading zero on the day). Used for dates written in free text."""
+    return f"{d.day} {d:%b} {d.year}"
+
+
+def earliest_start_answer(profile: dict, today: date | None = None, *, iso: bool = False) -> str:
+    """The stored date while it is in the future, otherwise 'Immediately'. Free text gets '19 Oct 2026';
+    date inputs (iso=True) keep their own YYYY-MM-DD format."""
     today = today or date.today()
     start = _day(_emp(profile, ["earliest_start_date"])["earliest_start_date"])
-    return start.isoformat() if start > today else "Immediately"
+    if start > today:
+        return start.isoformat() if iso else human_date(start)
+    return "Immediately"
 
 
 def current_company_answer(profile: dict) -> str:
@@ -474,7 +498,7 @@ _SOURCE_BY_PLATFORM = {"linkedin": "LinkedIn", "naukri": "Naukri", "indeed": "In
 _SOURCE_ALIASES = {"Company website": ["company website", "company career", "careers page", "career page",
                                        "corporate website", "company site", "company's website",
                                        "our website", "direct"]}
-_REFERRER_Q = re.compile(r"referr|referred by|employee (name|referral)|who referred", re.I)
+_REFERRER_Q = re.compile(r"\breferr|referred by|employee (name|referral)|who referred", re.I)
 _LEAVING_Q = re.compile(r"why\s+(are|do)\s+you\s+(looking|leaving|moving|want to (leave|move|change|switch))"
                         r"|reason(s)?\s+(for|of)\s+(leaving|change|job change|switching|looking)"
                         r"|why\s+(change|switch|move)|looking to (move|change|switch)", re.I)
@@ -553,8 +577,30 @@ def expected_ctc_lpa(profile: dict) -> float:
     return profile["compensation"]["expected_ctc_inr_lpa"]
 
 
+def expected_fixed_ctc_lpa(profile: dict) -> float | None:
+    """The user's own expected FIXED / base CTC in LPA, or None when it has not been given (-> flag)."""
+    v = profile.get("compensation", {}).get("expected_fixed_ctc_lpa")
+    return v if _is_number(v) and v > 0 else None
+
+
+def current_fixed_ctc_lpa(profile: dict) -> float | None:
+    v = profile.get("compensation", {}).get("current_ctc", {}).get("fixed_lpa")
+    return v if _is_number(v) else None
+
+
+def skill_years_for(profile: dict, tool: str) -> float | None:
+    """The user's own years with a tool (profile.yaml: skill_years), looked up through the technology
+    aliases (postgres -> postgresql). None for a tool that is not listed (-> flag). Never estimated."""
+    import guard
+    wanted = guard.canon(tool.strip().lower())
+    for name, years in (profile.get("skill_years") or {}).items():
+        if guard.canon(str(name).strip().lower()) == wanted and _is_number(years):
+            return years
+    return None
+
+
 def salary_answer(profile: dict, kind: str, country: str | None, *, required: bool = True,
-                  free_text: bool = False, unit: str = "lpa") -> tuple[str, str | None]:
+                  free_text: bool = False, unit: str = "lpa", lpa: float | None = None) -> tuple[str, str | None]:
     """(action, value) for a salary field. kind is 'current' or 'expected'.
     action: 'fill' (use value), 'blank' (leave the field empty), 'flag' (user answers).
     - Non-Indian forms: expected salary -> flag; current CTC -> fill only if required, else blank.
@@ -567,11 +613,15 @@ def salary_answer(profile: dict, kind: str, country: str | None, *, required: bo
             return "flag", None
         if not required:
             return "blank", None
-    lpa = expected_ctc_lpa(profile) if kind == "expected" else current_ctc_lpa(profile)
+    override = lpa is not None                    # a specific figure, e.g. the FIXED part: no total, no breakup text
+    if lpa is None:
+        lpa = expected_ctc_lpa(profile) if kind == "expected" else current_ctc_lpa(profile)
     if free_text:
         text = _lpa_text(lpa) + ("" if _is_india(country) else " INR")
         if kind == "expected":
             return "fill", f"{text} (negotiable)"
+        if override:
+            return "fill", text
         c = profile["compensation"]["current_ctc"]
         if c["report_as"] == "stated_total":      # make the breakup visible
             require(profile, ["compensation.current_ctc.fixed_lpa", "compensation.current_ctc.variable_lpa"])
