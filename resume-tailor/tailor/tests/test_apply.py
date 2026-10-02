@@ -99,7 +99,7 @@ class DryRun(unittest.TestCase):
                     mock.patch.object(tailor, "call_claude", fake_llm), \
                     mock.patch.object(intake, "fetch_job", lambda url: job), \
                     mock.patch.object(browser, "DEFAULT_PROFILE_DIR", tmp / "browser profile"):
-                out = apply.run(self.base + "/form", resume_pdf=pdf, headless=True)
+                out = apply.run(self.base + "/form", resume_pdf=pdf, headless=True, mode="dry-run")
 
             job_dir = tmp / "output" / "dryrun_Acme_Backend_Engineer"
             data = json.loads((job_dir / "answers.json").read_text(encoding="utf-8"))

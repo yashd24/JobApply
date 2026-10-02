@@ -7,6 +7,10 @@
 
 Modes (config.yaml sets the default per platform; --mode overrides; --dry-run overrides everything):
   dry-run  fill, highlight, screenshot. No submit code runs; the browser also blocks every submit.
+  prepare  tailor, compute every answer and the cover letter, write a copy-ready sheet, open the job and the sheet in
+           your normal default browser. YOU fill and submit by hand, then confirm in the terminal (recorded as a manual
+           submission). The automation browser is not used. The default for Lever. No --allow-submit needed.
+           (No terminal? `python apply.py --mark-submitted <job folder>` records it afterwards.)
   assist   fill, highlight what is left for you, then wait while YOU click Submit; then verify.
   auto     fill; if any required field is empty/flagged or a CAPTCHA / security-code challenge is visible, switch to
            assist and say why; otherwise screenshot, click Submit, hand over any visible challenge, verify.
@@ -30,8 +34,9 @@ except Exception:
 
 import tailor
 from jobbot import answers as A
-from jobbot import coverletter, filler, intake
+from jobbot import coverletter, filler, intake, prepare, sheets, tracker
 from jobbot import config as cfgmod
+from jobbot import fields as F
 from jobbot import profile as P
 from jobbot.ats import adapter_for
 from jobbot.browser import BrowserError, BrowserSession
@@ -41,6 +46,7 @@ PROFILE_FILE = ROOT / "profile.yaml"
 CONFIG_FILE = ROOT / "config.yaml"
 RESULT_WAIT_S = 90          # how long auto mode waits for a confirmation after clicking Submit
 ASSIST_VERIFY_WAIT_S = 20   # how long assist mode keeps looking for a confirmation after the user presses Enter
+ASSIST_WAIT_S = 900         # without a terminal: how long assist mode watches the page for the user's submit (15 min)
 
 
 def would_need_assist(answers: list[A.Answer], captcha_challenge_visible: bool) -> list[str]:
@@ -59,14 +65,53 @@ def _canonical(url: str) -> str:
 
 def decide_mode(requested: str, canonical_url: str, allow_submit: "str | None") -> tuple[str, str]:
     """(mode actually used, note). Real modes need --allow-submit to name THIS job."""
-    if requested == "dry-run":
-        return "dry-run", ""
+    if requested in ("dry-run", "prepare"):          # neither ever submits, so neither needs an approval
+        return requested, ""
     if not allow_submit:
         return "dry-run", (f"{requested} was requested but --allow-submit was not given, so this is a dry run. "
                            f"To submit for real add: --allow-submit {canonical_url}")
     if _canonical(allow_submit) != _canonical(canonical_url):
         return "dry-run", f"--allow-submit does not match this job ({canonical_url}), so this is a dry run"
     return requested, "real submission approved for this job"
+
+
+def _tracker_file() -> Path:
+    return tailor.OUTPUT_DIR / "tracker.sqlite3"
+
+
+def _sheet_client():
+    """The Google Sheet from config.yaml, or None when it is not configured or not yet authorised. A run never
+    opens a Google sign-in by itself: authorise once with `python apply.py --sync-sheet`."""
+    cfg = cfgmod.load_config(CONFIG_FILE)
+    if not sheets.configured(cfg):
+        return None
+    client = sheets.client_from_config(cfg, ROOT)
+    if not client.token_file.exists():
+        print("    (Google Sheet not synced: run `python apply.py --sync-sheet` once to authorise it)")
+        return None
+    return client
+
+
+def _track(job_dir: Path) -> None:
+    """Record this folder's run in the tracker (and the Google Sheet, if configured). A tracker or sheet problem
+    never fails an application run."""
+    try:
+        with tracker.Tracker(_tracker_file()) as t:
+            row = t.record_folder(job_dir)
+            client = _sheet_client() if row else None
+            if client:
+                print(f"    Google Sheet: {sheets.sync(t, client, urls=[row['canonical_url']])}")
+    except Exception as e:
+        print(f"    warning: could not update the tracker or sheet ({type(e).__name__}: {e})")
+
+
+def _already_submitted(url: str):
+    try:
+        with tracker.Tracker(_tracker_file()) as t:
+            row = t.job(url)
+            return dict(row) if row and row["status"] == "submitted" else None
+    except Exception:
+        return None
 
 
 def _status_from(confirmed: "bool | None") -> str:
@@ -82,8 +127,9 @@ def wait_for_result(session, adapter, *, timeout_s: "float | None" = None, poll_
     while time.time() < deadline:
         challenge = adapter.challenge(page)
         if challenge:
-            session.pause_for_user(f"A {challenge.replace('-', ' ')} needs you. Complete it in the browser window "
-                                   "(it is never bypassed), then press Enter.")
+            session.hand_over(f"A {challenge.replace('-', ' ')} needs you. Complete it in the browser window "
+                              "(it is never bypassed), then press Enter.",
+                              lambda: adapter.challenge(session.page) is not None, timeout_s=ASSIST_WAIT_S)
             deadline = time.time() + timeout_s
             page = session.page
             continue
@@ -94,27 +140,125 @@ def wait_for_result(session, adapter, *, timeout_s: "float | None" = None, poll_
     return adapter.is_confirmed(page)
 
 
+def _snap(session, name: str):
+    """A screenshot, or None if the page is gone (the user may have closed the window)."""
+    try:
+        return session.screenshot(name)
+    except Exception:
+        return None
+
+
 def assist(session, adapter, answers, note: str = "") -> "bool | None":
     flagged = [a for a in answers if a.status == A.FLAGGED]
     print("\n" + "=" * 70)
     print("ASSIST: the form is filled. Fields outlined in orange are yours to answer:")
     for a in flagged:
         print(f"   {'*' if a.required else ' '} {a.label[:70]}  ({a.note})")
-    session.pause_for_user((note + " " if note else "") + "Check the form, fix the highlighted fields, click Submit "
-                           "yourself, then press Enter here so I can verify the result.")
-    page = session.page
-    deadline = time.time() + ASSIST_VERIFY_WAIT_S
-    verdict = adapter.is_confirmed(page)
-    while verdict is None and time.time() < deadline:
-        page.wait_for_timeout(1000)
+    lead = (note + " " if note else "") + "Check the form, fix the highlighted fields, click Submit yourself"
+    seen: dict = {"verdict": None}
+
+    def waiting() -> bool:                       # only used when there is no terminal to press Enter in
+        seen["verdict"] = adapter.is_confirmed(session.page)
+        return seen["verdict"] is not True
+
+    # With a terminal: wait for Enter. Without one (or if the Enter prompt fails because stdin is closed): watch
+    # the page until the confirmation appears, the time is up, or the window is closed. A CAPTCHA the user solves
+    # along the way is just part of the wait.
+    outcome = session.hand_over(lead + ", then press Enter here (or just submit: I will detect the confirmation).",
+                                waiting, timeout_s=ASSIST_WAIT_S)
+    verdict = seen["verdict"]
+    if outcome == "done" and verdict is not True:        # Enter was pressed: give the page a moment to show the result
+        page = session.page
         verdict = adapter.is_confirmed(page)
+        deadline = time.time() + ASSIST_VERIFY_WAIT_S
+        while verdict is None and time.time() < deadline:
+            page.wait_for_timeout(1000)
+            verdict = adapter.is_confirmed(page)
+    else:
+        print(f"    assist wait ended: {outcome}")
     return verdict
+
+
+def _save_prepare(job_dir: Path, out: dict, job, status: str, requested: str, **extra) -> None:
+    out["outcome"] = {"status": status, "confirmation": status == "submitted" or None, "submitted_by": extra.get("submitted_by"),
+                      "finished": datetime.now().isoformat(timespec="seconds")}
+    (job_dir / "answers.json").write_text(json.dumps(out, indent=2, ensure_ascii=False), encoding="utf-8")
+    (job_dir / "apply_result.json").write_text(json.dumps(
+        {"status": status, "mode": "prepare", "mode_requested": requested, "url": job.canonical_url,
+         "company": job.company, "role": job.role, "confirmation": out["outcome"]["confirmation"], **extra},
+        indent=2, ensure_ascii=False), encoding="utf-8")
+
+
+def _prepare(job, job_dir: Path, resume_pdf: Path, resume: dict, profile: dict, cover, meta: dict, requested: str,
+             *, opener=None, input_fn=input) -> dict:
+    """Prepare mode: answers computed from the intake questions, no automation browser at all. The user opens the job
+    in their normal browser, submits by hand and confirms here; it is recorded as a manual submission."""
+    fields = F.fields_from_questions(job.questions)
+    if not fields:
+        raise SystemExit("No questions could be read for this posting, so there is nothing to prepare. "
+                         "Try --mode dry-run to look at the live form.")
+    print("3/6 Computing every answer from the posting's questions (no browser is driven)...")
+    ctx = A.Context(profile=profile, resume=resume, company=job.company, role=job.role, job_location=job.location,
+                    platform=job.platform, jd_text=job.jd_text, resume_pdf=resume_pdf, cover_letter=cover,
+                    llm=tailor.call_claude)
+    answers = A.answer_fields(fields, ctx)
+    meta["fields_found"] = len(fields)
+    out = A.to_json(answers)
+    out["meta"] = meta
+    txt, page = prepare.write_sheet(job_dir, answers, resume_pdf, job)
+    _save_prepare(job_dir, out, job, "prepared", requested)
+    _track(job_dir)
+
+    print("4/6 The sheet:\n")
+    print(prepare.sheet_text(answers, resume_pdf, job))
+    mine = [a for a in answers if a.status == A.FLAGGED]
+    if mine:
+        print(f"{len(mine)} field(s) are yours to answer ({sum(a.required for a in mine)} required):")
+        for a in mine:
+            print(f"   {'*' if a.required else ' '} {a.label[:70]}  ({a.note})")
+    print(f"5/6 Opening the job in your default browser, with the sheet next to it.\n"
+          f"    Sheet: {page}\n    Resume PDF: {resume_pdf}")
+    for target in (job.apply_url, page.as_uri()):
+        if not prepare.open_in_default_browser(target, opener):
+            print(f"    could not open a browser; open this yourself: {target}")
+
+    submitted = prepare.confirm_manual(input_fn)
+    if submitted:
+        status, extra = "submitted", {"submitted_by": "manual"}
+    elif submitted is None:
+        status, extra = "prepared", {"note": "no terminal to confirm in; run: python apply.py --mark-submitted "
+                                             f"\"{job_dir}\" once you have submitted"}
+        print("\nNo terminal to ask in. After you submit, record it with:\n    " + extra["note"].split("run: ")[1])
+    else:
+        status, extra = "prepared", {"note": "the user said they did not submit"}
+    _save_prepare(job_dir, out, job, status, requested, **extra)
+    _track(job_dir)
+    print(f"6/6 Done. Status: {status.upper()}" + (" (manual submission)" if status == "submitted" else
+                                                    " (nothing was submitted)"))
+    return out
+
+
+def mark_submitted(job_dir: Path) -> dict:
+    """Record a prepared application as submitted by hand (for runs that had no terminal to confirm in)."""
+    path = Path(job_dir) / "apply_result.json"
+    if not path.exists():
+        raise SystemExit(f"{path} does not exist: that folder has no prepared application.")
+    result = json.loads(path.read_text(encoding="utf-8"))
+    if result.get("mode") != "prepare":
+        raise SystemExit(f"This folder is a {result.get('mode')} run, not a prepared one; nothing changed.")
+    result.update({"status": "submitted", "confirmation": True, "submitted_by": "manual", "note": None,
+                   "marked": datetime.now().isoformat(timespec="seconds")})
+    path.write_text(json.dumps(result, indent=2, ensure_ascii=False), encoding="utf-8")
+    _track(Path(job_dir))
+    print(f"Recorded as a manual submission: {result.get('company')} | {result.get('role')}")
+    return result
 
 
 def run(url: str, *, mode: "str | None" = None, allow_submit: "str | None" = None, dry_run: bool = False,
         resume_pdf: "Path | None" = None, headless: bool = False, keep_open: bool = False,
-        session_factory=None) -> dict:
-    """`session_factory(job_dir) -> BrowserSession` lets tests drive the run with a scripted user."""
+        session_factory=None, opener=None, input_fn=input, reapply: bool = False) -> dict:
+    """`session_factory(job_dir) -> BrowserSession` lets tests drive the run with a scripted user; `opener(url)` and
+    `input_fn(prompt)` stand in for the default browser and the terminal in prepare mode."""
     profile = P.load_profile(PROFILE_FILE)
     todos = P.find_todos(profile)
     if todos:
@@ -131,7 +275,10 @@ def run(url: str, *, mode: "str | None" = None, allow_submit: "str | None" = Non
     requested = cfgmod.requested_mode(cfg, job.platform, mode, dry_run)
     used, mode_note = decide_mode(requested, job.canonical_url, allow_submit)
     print(f"    mode: {used}" + (f"  ({mode_note})" if mode_note else ""))
-    if used != "dry-run" and headless:
+    if used != "dry-run" and not reapply and (prev := _already_submitted(job.canonical_url)):
+        raise SystemExit(f"Already submitted ({prev['submitted_by'] or prev['mode']}, {(prev['submitted_at'] or '')[:10]}): "
+                         f"{prev['company']} | {prev['role']}. Nothing was done. Add --reapply to apply again anyway.")
+    if used in ("assist", "auto") and headless:
         raise SystemExit("assist / auto need a visible browser window (do not use --headless).")
     adapter = adapter_for(job.platform)
 
@@ -157,6 +304,10 @@ def run(url: str, *, mode: "str | None" = None, allow_submit: "str | None" = Non
                   "captcha_possible": job.captcha_possible, "intake_questions": len(job.questions),
                   "warnings": job.warnings}
     outcome: dict = {"status": "dry_run", "confirmation": None}
+
+    if used == "prepare":
+        return _prepare(job, job_dir, resume_pdf, resume, profile, cover, meta, requested,
+                        opener=opener, input_fn=input_fn)
 
     print(f"3/6 Opening the form ({'submitting is disabled for the whole browser' if used == 'dry-run' else 'REAL MODE'})...")
     try:
@@ -198,9 +349,10 @@ def run(url: str, *, mode: "str | None" = None, allow_submit: "str | None" = Non
             if used == "assist":
                 verdict = assist(b, adapter, answers)
                 outcome = {"status": _status_from(verdict), "confirmation": verdict}
+                outcome["verification"] = adapter.verify(b.page).to_dict()
                 if outcome["status"] != "submitted":
                     outcome["validation_errors"] = adapter.validation_errors(b.page)
-                shots.append(b.screenshot("after_submit"))
+                shots.extend(filter(None, [_snap(b, "after_submit")]))
             elif used == "auto":
                 reasons = list(meta["would_need_assist"]) + [f"could not fill: {x}" for x in meta["fill_problems"]]
                 if reasons:
@@ -215,9 +367,10 @@ def run(url: str, *, mode: "str | None" = None, allow_submit: "str | None" = Non
                     adapter.submit(b.page)
                     verdict = wait_for_result(b, adapter)
                 outcome = {"status": _status_from(verdict), "confirmation": verdict}
+                outcome["verification"] = adapter.verify(b.page).to_dict()
                 if outcome["status"] != "submitted":
                     outcome["validation_errors"] = adapter.validation_errors(b.page)
-                shots.append(b.screenshot("after_submit"))
+                shots.extend(filter(None, [_snap(b, "after_submit")]))
             meta["screenshots"] = [str(s) for s in shots]
             if keep_open and used == "dry-run":
                 b.pause_for_user("Dry run finished. Look at the form; NOTHING was submitted. Press Enter to close.")
@@ -235,6 +388,7 @@ def run(url: str, *, mode: "str | None" = None, allow_submit: "str | None" = Non
          "switched_to_assist_because": meta.get("switched_to_assist_because")}, indent=2, ensure_ascii=False),
         encoding="utf-8")
 
+    _track(job_dir)
     print(f"6/6 Done. Status: {outcome['status'].upper()}" + (" (nothing was submitted)" if used == "dry-run" else ""))
     print(f"\n{'STATUS':<8} {'CATEGORY':<17} {'REQ':<4} LABEL -> ANSWER   [source]")
     for a in answers:
@@ -255,8 +409,18 @@ def run(url: str, *, mode: "str | None" = None, allow_submit: "str | None" = Non
 
 def main() -> None:
     ap = argparse.ArgumentParser(description="Fill an application form; submits only with --mode and --allow-submit.")
-    ap.add_argument("--url", required=True)
-    ap.add_argument("--mode", choices=cfgmod.MODES, help="dry-run | assist | auto (default: config.yaml, else dry-run)")
+    ap.add_argument("--url")
+    ap.add_argument("--mark-submitted", type=Path, metavar="JOB_FOLDER",
+                    help="record a prepared application (that folder) as submitted by hand, then exit")
+    ap.add_argument("--status", nargs="?", const=20, type=int, metavar="N",
+                    help="show the N most recent tracked applications (default 20), then exit")
+    ap.add_argument("--sync-sheet", action="store_true",
+                    help="push every tracked application to the Google Sheet (first run opens a Google sign-in), then exit")
+    ap.add_argument("--import-existing", action="store_true",
+                    help="read every job folder in output/ into the tracker, then exit")
+    ap.add_argument("--reapply", action="store_true", help="apply even though this posting is already tracked as submitted")
+    ap.add_argument("--mode", choices=cfgmod.MODES,
+                    help="dry-run | prepare | assist | auto (default: config.yaml; Lever defaults to prepare, else dry-run)")
     ap.add_argument("--allow-submit", metavar="JOB_URL",
                     help="the canonical URL of THIS job; required for assist/auto to really submit")
     ap.add_argument("--dry-run", action="store_true", help="force a dry run whatever else is set")
@@ -264,9 +428,31 @@ def main() -> None:
     ap.add_argument("--headless", action="store_true", help="dry runs only")
     ap.add_argument("--keep-open", action="store_true", help="dry run: wait for Enter before closing the browser")
     args = ap.parse_args()
+    if args.mark_submitted:
+        mark_submitted(args.mark_submitted)
+        return
+    if args.sync_sheet:
+        cfg = cfgmod.load_config(CONFIG_FILE)
+        if not sheets.configured(cfg):
+            sys.exit("config.yaml has no `sheets: {spreadsheet_id: ...}`; see config.example.yaml.")
+        try:
+            with tracker.Tracker(_tracker_file()) as t:
+                print("Google Sheet:", sheets.sync(t, sheets.client_from_config(cfg, ROOT)))
+        except sheets.SheetsError as e:
+            sys.exit(f"SheetsError: {e}")
+        return
+    if args.import_existing or args.status is not None:
+        with tracker.Tracker(_tracker_file()) as t:
+            if args.import_existing:
+                print(f"Read {t.import_existing(tailor.OUTPUT_DIR)} job folder(s) into {_tracker_file()}")
+            if args.status is not None or args.import_existing:
+                print(tracker.format_status(t.recent(args.status or 20), t.counts()))
+        return
+    if not args.url:
+        ap.error("--url is required")
     try:
         run(args.url, mode=args.mode, allow_submit=args.allow_submit, dry_run=args.dry_run,
-            resume_pdf=args.resume_pdf, headless=args.headless, keep_open=args.keep_open)
+            resume_pdf=args.resume_pdf, headless=args.headless, keep_open=args.keep_open, reapply=args.reapply)
     except (tailor.TailorError, intake.IntakeError, cfgmod.ConfigError) as e:
         sys.exit(f"{type(e).__name__}: {e}")
 

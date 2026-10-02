@@ -114,6 +114,48 @@ class Browser(unittest.TestCase):
             b.goto(self.url)                                      # a fresh page is opened transparently
             self.assertEqual(b.page.title(), "Test Job")
 
+    def test_hand_over_without_a_terminal_watches_the_page_instead_of_waiting_for_enter(self):
+        ticks = []
+
+        def hook(s):                                    # plays the user: does the thing on the 3rd look
+            ticks.append(1)
+            if len(ticks) == 3:
+                s.page.evaluate("window.userDone = true")
+        with self.session(interactive=False, poll_hook=hook) as b:
+            b.goto(self.url)
+            self.assertFalse(b.interactive)
+            result = b.hand_over("do the thing", lambda: not b.page.evaluate("!!window.userDone"), timeout_s=30, poll_s=0.05)
+        self.assertEqual((result, len(ticks)), ("done", 3))
+
+    def test_the_user_is_told_in_the_page_that_the_bot_is_waiting(self):
+        seen = {}
+
+        def hook(s):
+            seen["banner"] = s.page.evaluate("(document.getElementById('jobbot-banner') || {}).textContent || null")
+        with self.session(interactive=False, poll_hook=hook) as b:
+            b.goto(self.url)
+            b.hand_over("Click Submit yourself", lambda: False, timeout_s=5, poll_s=0.05)
+        self.assertIn("WAITING FOR YOU", seen["banner"])
+        self.assertIn("Click Submit yourself", seen["banner"])
+
+    def test_hand_over_times_out_and_notices_a_closed_window(self):
+        with self.session(interactive=False) as b:
+            b.goto(self.url)
+            self.assertEqual(b.hand_over("x", lambda: True, timeout_s=0.3, poll_s=0.05), "timeout")
+        with self.session(interactive=False, poll_hook=lambda s: s.page.close()) as b:
+            b.goto(self.url)
+            self.assertEqual(b.hand_over("x", lambda: True, timeout_s=10, poll_s=0.05), "closed")
+
+    def test_hand_over_with_a_terminal_uses_enter(self):
+        asked = []
+        b = BrowserSession(self.root / "h", profile_dir=self.root / "browser profile", headless=True,
+                           input_fn=lambda prompt: asked.append(prompt) or "", output_fn=lambda *_: None)
+        with b:
+            b.goto(self.url)
+            self.assertTrue(b.interactive)
+            self.assertEqual(b.hand_over("press it", lambda: True), "done")
+        self.assertEqual(len(asked), 1)
+
     def test_pause_without_a_terminal_is_a_clear_error(self):
         def eof(_):
             raise EOFError

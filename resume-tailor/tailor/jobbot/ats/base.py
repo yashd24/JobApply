@@ -14,22 +14,21 @@ import re
 
 from jobbot import fields as F
 from jobbot import filler
+from jobbot import verify as V
+from jobbot.verify import CODE_TEXT, FAILURE_TEXT, SUCCESS_TEXT  # noqa: F401  (re-exported: adapters and tests use them here)
 
-SUCCESS_TEXT = re.compile(
-    r"thank you for (applying|your application|submitting|your interest)|application (has been |was )?"
-    r"(submitted|received|sent)|we('ve| have) received your application|successfully submitted", re.I)
-CODE_TEXT = re.compile(r"security code|verification code|enter the (\d+|eight|six)[- ]?(character|digit)|"
-                       r"code (was |we )?sent to", re.I)
 SUBMIT_LABEL = re.compile(r"submit( application)?|apply( now)?|send application", re.I)
 
 
 class ATS:
     name = "generic"
+    form_url: "str | None" = None       # where the form was opened: a later different address is evidence
     success_url = re.compile(r"/(thanks|thank-you|confirmation|submitted)(/|\?|$)", re.I)
 
     # ── opening and reading the form ──
     def open_application(self, session, job) -> int:
         status = session.goto(job.apply_url)
+        self.form_url = session.page.url
         if status < 400:
             session.page.wait_for_selector("form", timeout=20000)
             session.human_delay(1.0, 1.5)
@@ -77,6 +76,21 @@ class ATS:
 
     # ── what happened? ──
     def validation_errors(self, page) -> list[str]:
+        try:
+            return self._validation_errors(page)
+        except Exception:                      # the page is gone (the user closed the window): nothing to report
+            return []
+
+    def _validation_errors(self, page) -> list[str]:
+        found = self._field_errors(page)
+        try:
+            text = page.evaluate("document.body ? document.body.innerText : ''")
+            found += [m.group(0) for m in [FAILURE_TEXT.search(text)] if m]
+        except Exception:
+            pass
+        return found
+
+    def _field_errors(self, page) -> list[str]:
         return list(page.evaluate("""() => {
             const out = [];
             document.querySelectorAll('[aria-invalid="true"], [role="alert"], .error, .field-error, .application-error')
@@ -84,17 +98,16 @@ class ATS:
                               if (t && e.offsetParent !== null) out.push(t.slice(0, 120)); });
             return Array.from(new Set(out)).slice(0, 10); }"""))
 
+    def verify(self, page) -> V.Verdict:
+        """What the page shows right now, classified by `verify.classify` (M6)."""
+        try:
+            return V.classify(V.collect(page, self.form_url), self.success_url)
+        except Exception:                      # the page is gone (the user closed the window): nothing to judge
+            return V.Verdict(V.NEEDS_REVIEW, "the page could not be read (the window may have been closed)")
+
     def is_confirmed(self, page) -> "bool | None":
         """True: a success signal. False: the form is still there with validation errors. None: unclear."""
-        try:
-            text = page.evaluate("document.body ? document.body.innerText : ''")
-        except Exception:
-            return None
-        if self.success_url.search(page.url) or SUCCESS_TEXT.search(text):
-            return True
-        if self.validation_errors(page):
-            return False
-        return None
+        return self.verify(page).confirmed
 
     def challenge(self, page) -> "str | None":
         if filler.captcha_challenge_visible(page):

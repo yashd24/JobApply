@@ -12,6 +12,7 @@ Nothing here clicks submit; base.ATS.submit does, and only in a real (assist/aut
 from __future__ import annotations
 
 import re
+import time
 
 from jobbot import answers as A
 from jobbot import filler
@@ -107,21 +108,27 @@ def _autocomplete(page, key: str, text: str, hints: "list[str] | None" = None) -
     user's state or country. If only a different place with that name is offered, fail: never guess."""
     loc = _open(page, key)
     loc.press_sequentially(text, delay=40)
-    try:
-        page.wait_for_selector(MENU, timeout=filler.SUGGESTION_WAIT_MS)
-    except Exception:
-        page.keyboard.press("Escape")
-        return False, "no location suggestions appeared"
-    opts = _menu_texts(page)
     city = text.split(",")[0].strip()
     names = A._city_names(city)
-    named = [i for i, o in enumerate(opts) if any(re.search(rf"(?<![a-z]){re.escape(n)}(?![a-z])", _norm(o))
-                                                  for n in names)]
+    # The list refreshes while/after typing, so a first read may hold results for "B" or "Ba": keep re-reading
+    # until a suggestion naming the city (and the user's state/country) shows up, or the time is up.
+    deadline = time.time() + filler.SUGGESTION_WAIT_MS / 1000
+    opts: list[str] = []
     pick = None
-    if hints:
-        pick = next((i for i in named if any(_names_place(opts[i], h) for h in hints)), None)
-    elif named:
-        pick = named[0]
+    while time.time() < deadline:
+        opts = _menu_texts(page)
+        named = [i for i, o in enumerate(opts) if any(re.search(rf"(?<![a-z]){re.escape(n)}(?![a-z])", _norm(o))
+                                                      for n in names)]
+        if hints:
+            pick = next((i for i in named if any(_names_place(opts[i], h) for h in hints)), None)
+        elif named:
+            pick = named[0]
+        if pick is not None:
+            break
+        page.wait_for_timeout(300)
+    if not opts and pick is None:
+        page.keyboard.press("Escape")
+        return False, "no location suggestions appeared"
     if pick is None:
         page.keyboard.press("Escape")
         return False, (f"no suggestion names {city!r} in {', '.join(hints)}: {opts[:3]}" if hints

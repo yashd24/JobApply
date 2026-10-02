@@ -17,8 +17,10 @@ The full design, rules and milestone checks live in [`plan.md`](plan.md). This f
 | M2 | Intake: Greenhouse / Lever URL -> job data + form questions | done |
 | M3 | Browser session (Playwright, persistent profile, screenshots, pause/resume) | done |
 | M4 | Field discovery, answer pipeline, cover letters, dry-run form filling | done |
-| M5 | Greenhouse + Lever adapters, dry-run / assist / auto modes | built; 4 Greenhouse + 3 Lever dry runs clean; real submissions await your per-job approval |
-| M6-M8 | Verification fixtures, tracker (SQLite + Sheets), polish | not started |
+| M5 | Greenhouse + Lever adapters, dry-run / prepare / assist / auto modes | done except one real auto submission (project44 was submitted in assist mode; Lever uses prepare) |
+| M6 | Verification of the result page | built; tested on saved confirmation / error pages |
+| M7 | Tracker | SQLite built (`--status`, dedupe); Google Sheets sync built, needs your credentials to try live |
+| M8 | Polish: `--resume-from`, clearer errors | not started |
 
 `apply.py` is a dry run unless you explicitly approve a specific job (see below); nothing submits by default.
 
@@ -126,6 +128,11 @@ stealth, fingerprint spoofing or CAPTCHA solving: when a CAPTCHA, 2FA or anythin
 python apply.py --url <greenhouse-or-lever-job-url>                       # dry run: fills, screenshots, never submits
 python apply.py --url <job-url> --mode assist --allow-submit <job-url>    # fills, waits while YOU click Submit, verifies
 python apply.py --url <job-url> --mode auto   --allow-submit <job-url>    # submits itself (see below)
+python apply.py --url <lever-job-url>                                     # Lever defaults to prepare (see below)
+python apply.py --mark-submitted <job folder>                             # record a prepared job you submitted by hand
+python apply.py --status                                                  # recent applications (SQLite tracker)
+python apply.py --import-existing                                         # rebuild the tracker from output/ folders
+python apply.py --sync-sheet                                              # push everything to the Google Sheet (see config.example.yaml)
 ```
 
 Reads the job, tailors the resume (`--resume-pdf` reuses one), opens the form, answers every field (profile first,
@@ -133,13 +140,24 @@ the LLM only for non-sensitive questions), fills it, and outlines what is left f
 `screenshots/`, `answers.json` (every answer with its source and status) and `apply_result.json` (the outcome).
 
 - **dry-run** is the default and what `--dry-run` forces. The browser also blocks every submit event and click.
+- **prepare** (the default for Lever, whose anti-bot check rejects an automated submit) never drives the form. It
+  tailors the resume, computes every answer and the cover letter, writes `prepare_sheet.html/.txt` (answers in form
+  order, each with a Copy button, plus the PDF path) and opens the job and the sheet in your normal default browser.
+  You fill and submit by hand, then type `yes` in the terminal: it is recorded as a manual submission
+  (`submitted_by: manual`). No terminal? Run `--mark-submitted <job folder>` afterwards. Needs no `--allow-submit`.
 - **assist** fills, highlights the fields in orange that are yours, then pauses; you click Submit; it verifies.
 - **auto** fills, and submits only if every required field is filled and nothing is flagged; otherwise (or if a
   CAPTCHA / security-code challenge is actually visible) it switches to assist and says why. A challenge is handed
   to you, never solved. Statuses: `dry_run`, `submitted` (a confirmation was seen), `needs_review`, `failed`.
+- **Tracker and dedupe:** every run is recorded in `output/tracker.sqlite3`. A posting already tracked as submitted is
+  refused in prepare / assist / auto (add `--reapply` to override); dry runs are always allowed.
+- **Google Sheet (optional):** columns A-L are written by the bot, M-P (Response, Interview stage, Follow-up date,
+  My notes) are yours and are never written to; rows are matched by URL so you can sort freely. Setup is in
+  `config.example.yaml`.
 - **Approval is per job:** a real mode submits only if `--allow-submit` equals that job's canonical URL. Without
   it, or with a different URL, the run is downgraded to a dry run and says so. `config.yaml` (copy of
-  `config.example.yaml`) sets the default mode per platform; with no config everything is a dry run.
+  `config.example.yaml`) sets the default mode per platform; with no config everything is a dry run except Lever
+  (prepare).
 
 ## Tests
 

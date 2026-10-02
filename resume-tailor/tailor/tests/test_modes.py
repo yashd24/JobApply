@@ -72,11 +72,16 @@ class Server(http.server.BaseHTTPRequestHandler):
         pass
 
 
+def apply_mod():
+    import apply
+    return apply
+
+
 class Config(unittest.TestCase):
     def test_defaults_are_safe(self):
         cfg = cfgmod.load_config(Path("does-not-exist.yaml"))
         self.assertEqual(cfg["default_mode"], "dry-run")
-        for platform in ("greenhouse", "lever", "linkedin", "anything"):
+        for platform in ("greenhouse", "linkedin", "anything"):      # Lever's prepare default: see test_prepare.py
             self.assertEqual(cfgmod.requested_mode(cfg, platform), "dry-run", platform)
 
     def test_precedence(self):
@@ -146,7 +151,8 @@ class Runs(unittest.TestCase):
                                   "submitted.</p></body></html>")
         self.pauses = []          # the messages the user was shown while the run was paused
 
-    def go(self, path="/form", *, mode=None, allow="auto-url", user=None, dry_run=False, llm=None, headless_flag=False):
+    def go(self, path="/form", *, mode=None, allow="auto-url", user=None, dry_run=False, llm=None, headless_flag=False,
+           interactive=None, poll_hook=None):
         """Run apply.run against the local employer. `user(session)` is what the human does during a pause."""
         import apply
         import tailor
@@ -175,8 +181,8 @@ class Runs(unittest.TestCase):
                 return ""
 
             def factory(job_dir):
-                holder["s"] = BrowserSession(job_dir, headless=True, input_fn=input_fn,
-                                             output_fn=lambda m="": shown.append(str(m)))
+                holder["s"] = BrowserSession(job_dir, headless=True, input_fn=input_fn, interactive=interactive,
+                                             poll_hook=poll_hook, output_fn=lambda m="": shown.append(str(m)))
                 return holder["s"]
 
             with mock.patch.object(apply, "PROFILE_FILE", prof), \
@@ -201,7 +207,7 @@ class Runs(unittest.TestCase):
 
     # ── dry run ──
     def test_default_is_a_dry_run_that_never_submits(self):
-        out, result, _ = self.go(mode=None)
+        out, result, _ = self.go(mode="dry-run")
         self.assertEqual((result["status"], result["mode"]), ("dry_run", "dry-run"))
         self.assertEqual(self.posts, [])
         self.assertEqual(self.pauses, [])
@@ -223,7 +229,7 @@ class Runs(unittest.TestCase):
 
     def test_a_dry_run_never_pauses_for_the_user(self):
         clicked = []
-        out, result, _ = self.go(mode=None, user=lambda s: clicked.append(1))
+        out, result, _ = self.go(mode="dry-run", user=lambda s: clicked.append(1))
         self.assertEqual((clicked, self.pauses, self.posts), ([], [], []))
 
     # ── assist ──
@@ -240,6 +246,21 @@ class Runs(unittest.TestCase):
         out, result, _ = self.go(mode="assist", user=None)
         self.assertEqual(self.posts, [])
         self.assertEqual(result["status"], "needs_review")
+
+    def test_the_employers_whole_form_refusal_is_reported_as_failed_with_its_reason(self):
+        """Lever's reply when its anti-bot check rejects an automated browser (seen live on a Hevo Data form)."""
+        Server.submit_response = ("<html><body><form><h3>Submit</h3><p>✱ There was an error verifying your "
+                                  "application. Please try again.</p></form></body></html>")
+        out, result, _ = self.go(mode="assist", user=lambda s: s.page.click("button[type=submit]"))
+        self.assertEqual(result["status"], "failed")
+        self.assertIn("error verifying your application", " ".join(result["validation_errors"]).lower())
+
+    def test_failure_text_patterns(self):
+        from jobbot.ats.base import FAILURE_TEXT
+        for text in ("There was an error verifying your application. Please try again.", "Something went wrong",
+                     "We couldn't submit your application"):
+            self.assertTrue(FAILURE_TEXT.search(text), text)
+        self.assertFalse(FAILURE_TEXT.search("Thank you for applying!"))
 
     def test_assist_with_validation_errors_is_failed(self):
         Server.submit_response = "<html><body><form><input aria-invalid='true'><p role='alert'>Email is required</p></form></body></html>"
@@ -288,6 +309,59 @@ class Runs(unittest.TestCase):
         self.assertEqual(self.posts, ["POST"])
         self.assertEqual(result["status"], "needs_review")
 
+    # ── assist with no terminal to press Enter in (how a run started by Claude Code works) ──
+    def test_assist_without_a_terminal_detects_the_users_submit_by_itself(self):
+        calls = []
+
+        def hook(session):                       # plays the user: clicks Submit on the second look
+            calls.append(1)
+            if len(calls) == 2:
+                session.page.click("button[type=submit]")
+        with mock.patch.object(apply_mod(), "ASSIST_WAIT_S", 30):
+            out, result, shots = self.go(mode="assist", interactive=False, poll_hook=hook)
+        self.assertEqual(self.pauses, [])                       # nobody pressed Enter: there was no Enter prompt
+        self.assertEqual(self.posts, ["POST"])
+        self.assertEqual((result["status"], result["mode"], result["confirmation"]), ("submitted", "assist", True))
+        self.assertTrue(any(s.endswith("after_submit.png") for s in shots), shots)
+
+    def test_assist_when_isatty_lies_and_stdin_is_closed_still_watches_the_page(self):
+        """The real failure: stdin.isatty() was True but input() raised EOFError. That must fall back, not crash."""
+        from jobbot.browser import BrowserSession
+        calls = []
+
+        def hook(session):
+            calls.append(1)
+            if len(calls) == 2:
+                session.page.click("button[type=submit]")
+        import apply
+        original = BrowserSession.__init__
+
+        def eof_input(prompt):
+            raise EOFError
+
+        # build the session ourselves: interactive (an input function exists) but reading it fails
+        def factory_patch(self, *a, **k):
+            k["input_fn"], k["poll_hook"] = eof_input, hook
+            k.pop("interactive", None)
+            original(self, *a, **k)
+        with mock.patch.object(BrowserSession, "__init__", factory_patch), \
+                mock.patch.object(apply, "ASSIST_WAIT_S", 30):
+            out, result, _ = self.go(mode="assist")
+        self.assertEqual(self.posts, ["POST"])
+        self.assertEqual((result["status"], result["confirmation"]), ("submitted", True))
+
+    def test_assist_without_a_terminal_times_out_to_needs_review_and_never_submits(self):
+        with mock.patch.object(apply_mod(), "ASSIST_WAIT_S", 3):
+            out, result, _ = self.go(mode="assist", interactive=False)
+        self.assertEqual((self.posts, result["status"]), ([], "needs_review"))
+
+    def test_assist_without_a_terminal_when_the_user_closes_the_window(self):
+        def hook(session):
+            session.page.close()
+        with mock.patch.object(apply_mod(), "ASSIST_WAIT_S", 30):
+            out, result, _ = self.go(mode="assist", interactive=False, poll_hook=hook)
+        self.assertEqual((self.posts, result["status"]), ([], "needs_review"))
+
     def test_headless_is_refused_for_real_modes(self):
         with self.assertRaises(SystemExit) as cm:
             self.go(mode="auto", headless_flag=True)
@@ -309,8 +383,14 @@ class WaitForResult(unittest.TestCase):
             self.page = WaitForResult.Page()
             self.pauses = []          # the messages the user was shown while the run was paused
 
+        interactive = True
+
         def pause_for_user(self, msg):
             self.pauses.append(msg)
+
+        def hand_over(self, msg, still_waiting, **kw):
+            self.pauses.append(msg)
+            return "done"
 
     class Adapter:
         def __init__(self, challenges, verdicts):

@@ -24,6 +24,10 @@ class BrowserError(Exception):
     pass
 
 
+class NoTerminalError(BrowserError):
+    """The user was asked to press Enter but stdin is closed (a background run)."""
+
+
 def _safe(name: str) -> str:
     return re.sub(r"[^\w.-]+", "_", name).strip("_") or "shot"
 
@@ -78,7 +82,12 @@ class BrowserSession:
 
     def __init__(self, job_dir: str | Path, *, profile_dir: str | Path | None = None,
                  headless: bool = False, input_fn: Callable[[str], str] = input,
-                 output_fn: Callable[[str], None] = print, slow_mo_ms: int = 0):
+                 output_fn: Callable[[str], None] = print, slow_mo_ms: int = 0,
+                 interactive: "bool | None" = None, poll_hook: "Callable[[BrowserSession], None] | None" = None):
+        """interactive=None: Enter-to-continue works if an input function was supplied or stdin is a terminal.
+        poll_hook is a testing aid: it runs on every poll while we wait for the user (to play the user)."""
+        self._interactive = interactive
+        self._poll_hook = poll_hook
         self.job_dir = Path(job_dir)
         self.screenshot_dir = self.job_dir / "screenshots"
         self.profile_dir = Path(profile_dir) if profile_dir else DEFAULT_PROFILE_DIR
@@ -169,6 +178,68 @@ class BrowserSession:
         self._ensure_page().screenshot(path=str(path), full_page=full_page)
         return path
 
+    _BANNER_JS = """(text) => {
+      let b = document.getElementById('jobbot-banner');
+      if (!b) { b = document.createElement('div'); b.id = 'jobbot-banner';
+        b.style.cssText = 'position:fixed;top:0;left:0;right:0;z-index:2147483647;background:#e67e22;color:#fff;' +
+          'font:600 15px/1.35 system-ui,sans-serif;padding:10px 16px;text-align:center;pointer-events:none;' +
+          'box-shadow:0 2px 8px rgba(0,0,0,.35)';
+        document.documentElement.appendChild(b); }
+      b.textContent = text;
+    }"""
+
+    def announce(self, message: str) -> None:
+        """Make it obvious the automation is waiting for the user: raise the tab and show a banner in the page.
+        (A window launched from a background process can open behind everything else.)"""
+        try:
+            page = self._ensure_page()
+            page.bring_to_front()
+            page.evaluate(self._BANNER_JS, "JOB BOT IS WAITING FOR YOU: " + message[:220])
+        except Exception:
+            pass                                   # cosmetic: never let it break the wait
+
+    @property
+    def interactive(self) -> bool:
+        """Can the user press Enter in a terminal? False for runs started without a console (then we watch the
+        page instead of waiting for Enter)."""
+        if self._interactive is not None:
+            return self._interactive
+        return self._input is not input or sys.stdin.isatty()
+
+    def hand_over(self, message: str, still_waiting: "Callable[[], bool]", *, timeout_s: float = 900,
+                  poll_s: float = 2.0) -> str:
+        """Give the user something to do in the browser (solve a challenge, click Submit...), then continue.
+        With a terminal: wait for Enter. Without one: poll `still_waiting()` until it turns False.
+        Returns "done", "timeout" or "closed" (the user closed the window)."""
+        self.announce(message)
+        if self.interactive:
+            try:
+                self.pause_for_user(message)
+                return "done"
+            except NoTerminalError:         # isatty() can say yes while stdin is closed (background runs)
+                pass
+        self._out("\n" + "=" * 70)
+        self._out(f"WAITING FOR YOU: {message}")
+        self._out(f"(No terminal to press Enter in, so I am watching the page. Waiting up to {int(timeout_s // 60)} min.)")
+        self._out("=" * 70)
+        deadline = time.time() + timeout_s
+        while time.time() < deadline:
+            try:
+                if self.page is None or self.page.is_closed():
+                    live = [p for p in self.context.pages if not p.is_closed()] if self.context else []
+                    if not live:
+                        return "closed"
+                    self.page = live[-1]
+                if self._poll_hook:
+                    self._poll_hook(self)
+                if not still_waiting():
+                    return "done"
+            except Exception as e:           # the page/window went away; say what actually happened
+                self._out(f"  (the watch ended because: {type(e).__name__}: {str(e).splitlines()[0][:100] if str(e) else ''})")
+                return "closed"
+            time.sleep(poll_s)
+        return "timeout"
+
     def pause_for_user(self, message: str) -> None:
         """Print why we stopped, then block until the user presses Enter in the terminal.
         The browser window stays live, so the user can work in it meanwhile."""
@@ -179,8 +250,8 @@ class BrowserSession:
         try:
             self._input("Press Enter to continue... ")
         except EOFError:
-            raise BrowserError("Needed the user to continue but there is no interactive terminal "
-                               "(stdin closed).") from None
+            raise NoTerminalError("Needed the user to continue but there is no interactive terminal "
+                                  "(stdin closed).") from None
         self._ensure_page()     # survives the user closing a tab; raises if the whole window is gone
         self._out("Resuming.\n")
 

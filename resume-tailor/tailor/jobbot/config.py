@@ -7,8 +7,10 @@ import yaml
 
 ROOT = Path(__file__).resolve().parents[1]
 CONFIG_FILE = ROOT / "config.yaml"
-MODES = ("dry-run", "assist", "auto")
-DEFAULTS = {"default_mode": "dry-run", "platforms": {}}      # no config.yaml -> every platform is a dry run
+MODES = ("dry-run", "prepare", "assist", "auto")
+# No config.yaml -> a dry run, except Lever: its anti-bot check rejects an automated submit, so Lever defaults to
+# prepare (the bot never submits; the user does, by hand, in their normal browser).
+DEFAULTS = {"default_mode": "dry-run", "platforms": {"lever": {"mode": "prepare"}}}
 
 
 class ConfigError(Exception):
@@ -17,13 +19,16 @@ class ConfigError(Exception):
 
 def load_config(path: Path | None = None) -> dict:
     path = path or CONFIG_FILE
-    cfg = {"default_mode": DEFAULTS["default_mode"],
+    cfg = {"default_mode": DEFAULTS["default_mode"], "sheets": {},
            "platforms": {k: dict(v) for k, v in DEFAULTS["platforms"].items()}}
     if path.exists():
         raw = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
         if not isinstance(raw, dict):
             raise ConfigError(f"{path.name} must be a mapping")
         cfg["default_mode"] = raw.get("default_mode", cfg["default_mode"])
+        cfg["sheets"] = raw.get("sheets") or {}
+        if not isinstance(cfg["sheets"], dict):
+            raise ConfigError("sheets must be a mapping (spreadsheet_id, sheet_name)")
         for name, body in (raw.get("platforms") or {}).items():
             cfg["platforms"].setdefault(name, {}).update(body or {})
     for where, mode in [("default_mode", cfg["default_mode"])] + [(f"platforms.{p}.mode", b.get("mode"))

@@ -2,6 +2,10 @@
 #
 # mode per platform:
 #   dry-run  fill the form, screenshot, NEVER submit (the default while developing)
+#   prepare  the bot never drives the employer's form. It tailors the resume, computes every answer and the cover
+#            letter, writes a copy-ready sheet (answers in form order + the PDF path), and opens the job and the sheet
+#            in your NORMAL default browser. You fill and submit by hand, then confirm in the terminal; it is recorded
+#            as a manual submission. Needs no --allow-submit (it cannot submit). The default for Lever.
 #   assist   fill everything, highlight what is left for you, then wait while YOU click Submit
 #   auto     fill and submit without you; falls back to assist if any required field is empty or flagged,
 #            or if a CAPTCHA / security-code challenge is actually visible
@@ -12,7 +16,19 @@ default_mode: dry-run
 
 platforms:
   greenhouse: {mode: assist}
-  lever: {mode: assist}
+  lever: {mode: prepare}         # not assist/auto: Lever's anti-bot check rejected a live automated submit (see plan.md)
   linkedin: {mode: assist}       # not supported yet; assist stays the default for LinkedIn and Naukri
   naukri: {mode: assist}
   indeed: {mode: assist}
+
+# Optional: mirror the tracker into a Google Sheet (one row per posting). Leave spreadsheet_id out to skip it.
+# Setup: create a Google Cloud project, enable the Google Sheets API, create OAuth client credentials of type
+# "Desktop app", save the JSON as credentials.json next to apply.py (gitignored), create an empty sheet with a tab
+# named below, paste its id (the long part of its URL) here, then run `python apply.py --sync-sheet` once: it opens a
+# Google sign-in and saves token.json (gitignored). After that every run updates its row by itself.
+# Columns A-L are the bot's (Date, Status, Mode, Company, Role, Location, URL, Score, Flagged fields, Resume file
+# used, Gaps, Notes). Columns M-P are yours (Response, Interview stage, Follow-up date, My notes): the bot never
+# writes there, and it finds a row by its URL, so you can sort and filter the sheet freely.
+# sheets:
+#   spreadsheet_id: ""
+#   sheet_name: Applications

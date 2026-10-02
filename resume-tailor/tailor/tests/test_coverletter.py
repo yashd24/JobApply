@@ -110,7 +110,42 @@ class NewGuards(unittest.TestCase):
         self.assertFails(fake, "not in the job description")
         unused = self.check(GOOD.replace("Backend Engineer", "role"), quotes=["reliable payment APIs in Python",
                                                                              "need a backend engineer"])
-        self.assertFails(unused, "not used in the letter")
+        self.assertFails(unused, "fewer than 2")                    # an unused quote does not count towards the two
+        spare = self.check(GOOD, quotes=["reliable payment APIs in Python", "backend engineer to build", "zebra crossing"])
+        self.assertFails(spare, "not in the job description")       # a quote that is not in the JD is still an error
+        self.assertEqual(self.check(GOOD, quotes=["reliable payment APIs in Python", "backend engineer to build",
+                                                  "build reliable payment APIs in Python with PostgreSQL"]), [])
+
+    def test_the_letter_may_not_contain_quotation_marks(self):
+        for q in ('"reliable payment APIs in Python"', "“reliable payment APIs in Python”"):
+            quoted = GOOD.replace("reliable payment APIs", q, 1)
+            self.assertFails(self.check(quoted), "quotation marks")
+        self.assertEqual(self.check(GOOD.replace("I would like", "I'd like", 1)), [])         # apostrophes are fine
+
+    def test_a_paraphrase_is_enough_when_it_keeps_the_quotes_key_nouns(self):
+        text = GOOD.replace("reliable payment APIs", "dependable payment APIs", 1)
+        self.assertEqual(self.check(text, quotes=["reliable payment APIs in Python", "backend engineer to build"]), [])
+
+    def test_no_more_than_two_achievements_with_numbers(self):
+        self.assertEqual(len([x for x in GOOD.split(". ") if any(c.isdigit() for c in x)]), 2)
+        three = GOOD.replace("anything around it.", "anything around it. It ran for 20 minutes each night.")
+        self.assertFails(self.check(three), "describe at most 2 achievements")
+        self.assertEqual(C.check_letter(three, RESUME, {**CFG, "achievements": {"max_sentences_with_numbers": 3}}), [])
+
+    def test_digits_in_the_role_name_are_not_an_achievement(self):
+        text = GOOD.replace("as a Backend Engineer.", "as a Software Engineer 2.", 1)
+        self.assertFails(self.check(text), "describe at most 2 achievements")
+        self.assertEqual(C.check_letter(text, RESUME, CFG, names="Acme Software Engineer 2"), [])
+
+    def test_the_interview_closing_is_banned_and_the_prompt_asks_for_a_simple_one(self):
+        bad = GOOD.replace("I would love to talk more about how I could help the team.",
+                           "In an interview, I would like to discuss how the team works.")
+        self.assertFails(self.check(bad), "banned phrase")
+        prompt = C.build_prompt("Acme", "Backend", JD, RESUME, CFG, ["Hi,\n\nHello."], closing=CFG["closing_styles"][0])
+        self.assertIn("NEVER put words in quotation marks", prompt)
+        self.assertIn("ONE or TWO achievements", prompt)
+        self.assertIn("simple, polite close", prompt)
+        self.assertFalse(any("interview" in x.lower() for x in CFG["closing_styles"]))
 
     def test_quotes_ignore_case_and_spacing(self):
         q = ["Reliable   payment APIs in PYTHON", "BACKEND engineer to build"]
@@ -148,11 +183,48 @@ class Closings(unittest.TestCase):
         self.assertIn(style, p)
 
     def test_the_guard_rejects_a_closing_sentence_used_before(self):
-        prev = [C.last_sentence(GOOD)]
+        prev = [C.closing_line(GOOD)]
         problems = C.check_letter(GOOD, RESUME, CFG, JD, QUOTES, prev)
         self.assertTrue(any("closing sentence is identical" in x for x in problems), problems)
         self.assertEqual(C.check_letter(GOOD, RESUME, CFG, JD, QUOTES, ["Something else entirely."]), [])
         self.assertEqual(C.last_sentence("One.\n\nTwo. Three here."), "Three here.")
+
+    def test_a_bare_thank_you_is_not_what_makes_a_closing_repeat(self):
+        """Regression (project44, 2026-10-02): the optional cover letter was left empty because both attempts ended
+        with "Thank you ..." and earlier letters had too. Only the sentence before the thanks has to differ."""
+        self.assertEqual(C.closing_line(GOOD), "I am also happy to answer any questions by email or on a short call, at a time "
+                         "that suits you.")
+        self.assertEqual(C.closing_line("One.\n\nTwo here. Thank you."), "Two here.")
+        self.assertEqual(C.closing_line("One.\n\nThank you for reading my application."),
+                         "Thank you for reading my application.")                       # only thanks: falls back
+        history = ["Thank you.", "Thank you for reading my application.", "Thank you for your time."]
+        self.assertEqual(C.check_letter(GOOD, RESUME, CFG, JD, QUOTES, history), [])
+
+    def test_the_same_closing_sentence_before_the_thanks_is_still_rejected(self):
+        again = GOOD.replace("Thank you for your time and for reading my application.", "Thank you.")
+        problems = C.check_letter(again, RESUME, CFG, JD, QUOTES, [C.closing_line(GOOD)])
+        self.assertTrue(any("closing sentence is identical" in x for x in problems), problems)
+
+    def test_digits_in_the_company_or_role_name_are_not_unbacked_numbers(self):
+        text = GOOD.replace("join Acme as", "join project44 as")
+        self.assertTrue(any("numbers that are not" in x for x in C.check_letter(text, RESUME, CFG)))
+        self.assertEqual(C.check_letter(text, RESUME, CFG, JD, QUOTES, names="project44 Software Engineer 2"), [])
+        invented = text.replace("50,000+", "90,000+")                                  # a real claim is still caught
+        self.assertTrue(any("90" in x for x in C.check_letter(invented, RESUME, CFG, names="project44")))
+
+    def test_an_optional_cover_letter_is_written_even_when_every_earlier_letter_ended_with_thanks(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            hist = Path(tmp) / "h.json"
+            hist.write_text(json.dumps([{"company": c, "style": "s%d" % i, "closing": t} for i, (c, t) in enumerate(
+                [("A", "Thank you."), ("B", "Thank you for reading my application."),
+                 ("C", "Thank you for your time.")])]), encoding="utf-8")
+            text = GOOD.replace("Thank you for your time and for reading my application.", "Thank you.")
+            prov = C.make_provider(Path(tmp) / "job", "project44", "Software Engineer 2", JD, RESUME,
+                                   lambda prompt: reply(text.replace("join Acme as", "join project44 as")), cfg=CFG,
+                                   samples=["Hi,\n\nHello."], history_path=hist)
+            value, note = prov(Field("cover_letter", "Cover Letter", "textarea", False))
+            self.assertIsNotNone(value, note)
+            self.assertIn("project44", value)
 
     def test_overused_template_closings_are_banned(self):
         for phrase in ("Thank you for your time and consideration.", "how this experience could help your team"):

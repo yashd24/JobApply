@@ -39,6 +39,8 @@ _SELF_CLAIM = re.compile(r"\b(taught me|i (have )?learn(ed|t)|learn(ed|t) to|i (
 MAX_LOVE_TO = 2          # "I would love to" is the user's phrase, but not three times in one letter
 MIN_QUOTES = 2
 _PLACEHOLDER = re.compile(r"\[[^\]\n]{1,40}\]|<[^>\n]{1,40}>|\{\{|\}\}|\bTODO\b|lorem ipsum", re.I)
+_QUOTE_MARKS = re.compile('["“”„‟«»]')
+MAX_ACHIEVEMENT_SENTENCES = 2     # default for cfg["achievements"]["max_sentences_with_numbers"]
 _MARKDOWN = re.compile(r"(^|\n)\s*([#>*\-] |\d+\. )|\*\*|`|__")
 _WORD = re.compile(r"[A-Za-z0-9][A-Za-z0-9'’+#./-]*")
 
@@ -89,6 +91,21 @@ def last_sentence(text: str) -> str:
     return parts[-1].strip()
 
 
+_BARE_THANKS = re.compile(r"^\W*thank(s| you)\b[^,;:]*$", re.I)
+
+
+def closing_line(text: str) -> str:
+    """What makes a letter's ending its own: the last sentence that is not a bare thank-you. Nearly every letter ends
+    with some "Thank you ...", so comparing those would reject every letter once a few exist; the sentence before
+    the thanks is what has to differ. A letter that is only thanks falls back to its last sentence."""
+    paras = paragraphs(text)
+    sentences = [x.strip() for x in re.split(r"(?<=[.!?])\s+", paras[-1]) if x.strip()] if paras else []
+    for sentence in reversed(sentences):
+        if not _BARE_THANKS.match(sentence):
+            return sentence
+    return last_sentence(text)
+
+
 def choose_closing(cfg: dict, company: str, role: str, recent_styles: list[str]) -> str:
     """A closing style that differs from the letters written most recently. Deterministic for a given job."""
     import hashlib
@@ -116,9 +133,11 @@ def save_history(path: Path | None, entry: dict, keep: int = 30) -> None:
 
 
 def check_letter(text: str, resume: dict, cfg: dict, jd_text: str | None = None,
-                 quotes: list[str] | None = None, previous_closers: list[str] | None = None) -> list[str]:
+                 quotes: list[str] | None = None, previous_closers: list[str] | None = None,
+                 names: str = "") -> list[str]:
     """Every reason this letter must not be used. An empty list means it passes. With jd_text, the letter
-    must also be anchored to the job description by verbatim quotes (see quote_problems)."""
+    must also be anchored to the job description by verbatim quotes (see quote_problems). `names` is the company and
+    role: digits in them ("project44", "Engineer 2") are not claims, so they are allowed."""
     problems: list[str] = []
     n_words = len(words(text))
     lo, hi, n_par = cfg["length"]["words_min"], cfg["length"]["words_max"], cfg["length"]["paragraphs"]
@@ -131,7 +150,7 @@ def check_letter(text: str, resume: dict, cfg: dict, jd_text: str | None = None,
         if _norm(phrase) in low:
             problems.append(f"banned phrase: '{phrase}'")
     vis = visible_text(resume)
-    extra = set(guard.numbers(text)) - set(guard.numbers(vis))
+    extra = set(guard.numbers(text)) - set(guard.numbers(vis)) - set(guard.numbers(names))
     if extra:
         problems.append(f"numbers that are not on the visible resume: {sorted(extra)}")
     vocab = {guard.canon(w) for w in guard.bank_vocabulary(_visible_data(resume))}
@@ -145,10 +164,19 @@ def check_letter(text: str, resume: dict, cfg: dict, jd_text: str | None = None,
         problems.append(f"claim about the candidate or an outcome that the resume does not state: '{m.group(0)}'")
     if low.count("i would love to") > MAX_LOVE_TO:
         problems.append(f"'I would love to' used {low.count('i would love to')} times; at most {MAX_LOVE_TO}")
-    if previous_closers and _squash(last_sentence(text)) in {_squash(c) for c in previous_closers}:
+    if previous_closers and _squash(closing_line(text)) in {_squash(c) for c in previous_closers}:
         problems.append("the closing sentence is identical to the one in an earlier letter; word it differently")
     if jd_text is not None:
         problems += quote_problems(text, jd_text, quotes or [])
+    if _QUOTE_MARKS.search(text):
+        problems.append("contains quotation marks: paraphrase the job description in natural words (the exact "
+                        "phrases belong only in jd_quotes)")
+    cap = (cfg.get("achievements") or {}).get("max_sentences_with_numbers", MAX_ACHIEVEMENT_SENTENCES)
+    with_numbers = [x for x in re.split(r"(?<=[.!?])\s+", text)
+                    if set(guard.numbers(x)) - set(guard.numbers(names))]
+    if len(with_numbers) > cap:
+        problems.append(f"{len(with_numbers)} sentences with numbers; describe at most {cap} achievements "
+                        "(1-2), each with a line on why it matters for this role")
     if _PLACEHOLDER.search(text):
         problems.append("contains a placeholder such as [Company] or <name>")
     if _MARKDOWN.search(text):
@@ -162,7 +190,8 @@ def _squash(s: str) -> str:
 
 def quote_problems(text: str, jd_text: str, quotes: list[str]) -> list[str]:
     """Statements about the company must be anchored to the job description. The model lists the verbatim JD
-    phrases it relied on; code checks every quote is really in the JD and really used in the letter."""
+    phrases it relied on (in its own field, never inside quotation marks in the letter); code checks every quote is
+    really in the JD and that the letter still carries the quote's key words, paraphrased around them."""
     jd, letter = _squash(jd_text), _norm(text)
     good = []
     out: list[str] = []
@@ -173,11 +202,10 @@ def quote_problems(text: str, jd_text: str, quotes: list[str]) -> list[str]:
         if sq not in jd:
             out.append(f"jd_quotes entry is not in the job description: '{str(q)[:60]}'")
             continue
-        used = [w for w in re.findall(r"[a-z]{4,}", sq) if w in letter]
-        if len(used) >= 2:
-            good.append(q)
-        else:
-            out.append(f"jd_quotes entry is not used in the letter: '{str(q)[:60]}'")
+        keys = set(re.findall(r"[a-z]{4,}", sq))
+        used = [w for w in keys if w in letter]
+        if len(used) >= min(2, len(keys)):                  # the letter paraphrases; it keeps the quote's key nouns
+            good.append(q)                                  # a quote the paraphrase dropped just does not count
     if len(good) < MIN_QUOTES:
         out.append(f"fewer than {MIN_QUOTES} verbatim job-description quotes anchor the letter (jd_quotes)")
     return out
@@ -212,15 +240,21 @@ THE CANDIDATE'S RESUME. This is the ONLY source of facts about the candidate:
 
 HOW TO WRITE
 {rules}
-- Exactly {L['paragraphs']} short paragraphs separated by one blank line, {L['words_min']}-{L['words_max']} words in total.
+- Exactly {L['paragraphs']} short paragraphs separated by one blank line, {L['words_min']}-{L['words_max']} words in total
+  (aim for about {(L['words_min'] + L['words_max']) // 2 - 10} words; under {L['words_min']} is rejected, so write the why-it-matters lines in full).
   No greeting line, no sign-off, no subject line (they are added for you). Plain text: no markdown, no lists.
 - Paragraph 1: the role, and in one or two plain sentences what you would love to work on there (from the JD).
-  Paragraph 2: connect 1-2 specific JD requirements to 1-2 concrete things from the resume bullets above, using the
-  real numbers exactly as written there. Paragraph 3: a simple close and one thank-you (the sign-off line is added for you, so do not add another).
+  Paragraph 2 (all achievements stay inside this one paragraph; never a fourth paragraph): pick ONE or TWO achievements from the resume bullets above (never three or more, and not a list), using
+  the real numbers exactly as written there. For each one say what you did, then one plain sentence on why it matters
+  for THIS role, tied to a JD requirement. Paragraph 3: a simple, polite close in the tone of the writing samples, with
+  one thank-you (the sign-off line is added for you, so do not add another). Do not write "In an interview" or
+  "I would like to discuss".
+- NEVER put words in quotation marks in the letter. Paraphrase the job description in natural wording; the exact
+  phrases go only in "jd_quotes".
 - Mention the company only using facts stated in the job description. Do not invent anything about it, and do not
   use anything you know about the company from elsewhere. Every statement about the company or the role must rest on a
-  short phrase copied EXACTLY from the job description; list at least {MIN_QUOTES} such phrases in "jd_quotes" and use
-  their key words in the letter. If you cannot quote it, do not say it.
+  short phrase copied EXACTLY from the job description; list at least {MIN_QUOTES} such phrases in "jd_quotes" and
+  keep their key nouns in the letter, reworded around them. If you cannot quote it, do not say it.
 - Say only what the resume above states. No feelings, lessons or personality claims ("I enjoy...", "this taught me...",
   "I like to...") and no results the resume does not state (for example "much faster").
 - Vary the wording and use "I would love to" at most {MAX_LOVE_TO} times.
@@ -249,7 +283,7 @@ def generate(company: str, role: str, jd_text: str, resume: dict, cfg: dict, sam
         except Exception as e:                               # Claude unavailable: no letter, never a guess
             result.attempts.append({"text": "", "problems": [f"LLM call failed: {type(e).__name__}: {e}"[:200]]})
             break
-        problems = (check_letter(text, resume, cfg, jd_text, quotes, previous_closers) if text
+        problems = (check_letter(text, resume, cfg, jd_text, quotes, previous_closers, f"{company} {role}") if text
                     else ["empty reply"])
         result.attempts.append({"text": text, "problems": problems, "jd_quotes": quotes})
         if not problems:
@@ -328,7 +362,7 @@ def make_provider(job_dir: Path, company: str, role: str, jd_text: str, resume: 
                 (job_dir / "cover_letter.txt").write_text(full_letter(resume, cache["res"].text) + "\n",
                                                           encoding="utf-8")
                 save_history(history_path, {"company": company, "style": closing,
-                                            "closing": last_sentence(cache["res"].text)})
+                                            "closing": closing_line(cache["res"].text)})
         res: LetterResult = cache["res"]
         if not res.ok:
             return None, "; ".join(res.problems)[:300] or "no letter produced"

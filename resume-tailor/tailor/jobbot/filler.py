@@ -8,6 +8,7 @@
 """
 from __future__ import annotations
 
+import time
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -133,14 +134,18 @@ def _fill_location_widget(page, f: Field, loc, value: str) -> FillResult:
         loc.first.click(timeout=TIMEOUT_MS)
         loc.first.fill("", timeout=TIMEOUT_MS)
         loc.first.press_sequentially(query, delay=40)
-        try:
-            options.first.wait_for(timeout=SUGGESTION_WAIT_MS)
-        except Exception:
-            continue
-        texts = [t.strip() for t in options.all_inner_texts()]
-        # With a state given, a suggestion must name it: "Bangalore, Oregon" is not the user's Bangalore.
-        pick = next((i for i, t in enumerate(texts)
-                     if any(n in t.casefold() for n in names) and (not state or state in t.casefold())), None)
+        # The list is refreshed while/after typing, so a first read can show results for "B" or "Ba". Keep
+        # re-reading until a suggestion naming the city (and state) appears, or the time is up.
+        deadline = time.time() + SUGGESTION_WAIT_MS / 1000
+        pick = None
+        while time.time() < deadline:
+            texts = [t.strip() for t in options.all_inner_texts()]
+            # With a state given, a suggestion must name it: "Bangalore, Oregon" is not the user's Bangalore.
+            pick = next((i for i, t in enumerate(texts)
+                         if any(n in t.casefold() for n in names) and (not state or state in t.casefold())), None)
+            if pick is not None:
+                break
+            page.wait_for_timeout(300)
         if pick is not None:
             options.nth(pick).click(timeout=TIMEOUT_MS)
             chosen = page.locator('[name="selectedLocation"]').evaluate("e => e.value")

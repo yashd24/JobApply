@@ -202,6 +202,34 @@ class CaptchaRule(Browserish):
             self.assertFalse(FL.captcha_challenge_visible(self.page(html)), name)
 
 
+STALE_THEN_REAL_WIDGET = """() => {
+  const inp = document.querySelector('input[name=location]'), hidden = document.querySelector('[name=selectedLocation]');
+  const box = document.createElement('div'); inp.parentElement.appendChild(box);
+  const show = (text) => { box.innerHTML = ''; const d = document.createElement('div'); d.className = 'dropdown-location';
+    d.textContent = text; d.addEventListener('click', () => { inp.value = d.textContent; hidden.value = '{"id":"x"}'; box.innerHTML = ''; });
+    box.appendChild(d); };
+  let timer = null;
+  inp.addEventListener('input', () => {                 // like the live service: results for early keystrokes arrive first
+    show('A, DNK'); clearTimeout(timer);
+    timer = setTimeout(() => show(inp.value.split(',')[0] + ', Karnataka, IND'), 900);
+  });
+  inp.addEventListener('blur', () => { if (!hidden.value) inp.value = ''; });
+}"""
+
+
+class LocationWidgetRace(Browserish):
+    def test_stale_early_results_are_not_mistaken_for_the_answer(self):
+        d = json.loads((REAL / "lv_gushwork" / "urls.json").read_text(encoding="utf-8"))
+        html = next(t for u, t in d["responses"].items() if u.endswith("/apply"))
+        pg = self.page(html)
+        pg.evaluate(STALE_THEN_REAL_WIDGET)
+        fields = [f for f in F.discover_fields(pg) if f.key == "location"]
+        a = A.Answer("location", "Current location", "text", True, "location", "Bangalore, Karnataka, India", "p", "high", A.FILLED)
+        res = FL.fill_fields(pg, fields, [a])
+        self.assertEqual((res[0].ok, res[0].detail), (True, "picked suggestion: Bangalore, Karnataka, IND"), res)
+        self.assertTrue(pg.input_value('[name="selectedLocation"]'))
+
+
 class LocationWidgetRetry(Browserish):
     """The live suggestion service sometimes answers only to the bare city; try "City, State", then the city."""
     PICKY = FAKE_LOCATION_WIDGET.replace("inp.addEventListener('input', () => {",

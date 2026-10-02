@@ -3,3 +3,5 @@ pypdf>=4.0
 requests>=2.31
 beautifulsoup4>=4.12
 playwright>=1.40
+google-api-python-client>=2.100
+google-auth-oauthlib>=1.1
