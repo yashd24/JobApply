@@ -240,6 +240,23 @@ LinkedIn-only posting is manual. You approve from the shortlist; approved manual
 their link, approved Greenhouse/Lever ones wait for the batch runner (not built yet). Every dropped posting and its
 reason is saved in `output/discovery/`.
 
+## Prepare the approved jobs (batch runner)
+
+```
+python batch.py              # prepare every approved job, one at a time
+python batch.py --list       # the queue, today's count and the daily cap; does nothing
+python batch.py --only 12,15 --limit 3 --delay 30
+```
+
+Approving a job (`discover.py --approve`) is what spends Claude usage, not finding it. For each approved job:
+**Greenhouse** is filled in the mode set for it in `config.yaml` (assist: you click Submit); **Lever** is prepared from
+its real form (tailored resume, cover letter, answers); **anything else** (LinkedIn, Naukri, company pages) gets the
+description fetched if missing, a tailored resume, a cover letter, and an answer sheet of the usual application
+questions. Those become **Ready for you** with their link (the Action needed tab). A job whose description cannot be
+read becomes **Manual**. Between jobs it waits `batch.delay_between_jobs_s`; it stops at `batch.daily_cap` jobs a day.
+If Claude's usage limit is reached it stops at once; the next `python batch.py` resumes that job first and reuses its
+folder. A failed job is recorded as Failed with the reason and the queue continues.
+
 ## Tests
 
 ```

@@ -9,8 +9,9 @@
     python discover.py --skip 2,5            decline those ids (never shown again)
     python discover.py --term "python developer" --results 10     a smaller trial run
 
-Nothing is applied here. An approved Greenhouse/Lever posting waits ("approved") for the batch runner; an approved
-posting with any other link becomes "manual" and goes to the Google Sheet with its link, for you to apply by hand.
+Nothing is applied here and no Claude usage is spent. Every approved posting waits ("approved") for the batch runner
+(python batch.py), which fills Greenhouse in assist mode and prepares everything else (tailored resume, cover letter,
+answer sheet) so it shows up as "Ready for you" with its link.
 """
 from __future__ import annotations
 
@@ -48,18 +49,6 @@ def show_shortlist(t: "T.Tracker", cfg: dict, write_html: bool = True) -> str:
         path.write_text(D.shortlist_html(rows, cfg), encoding="utf-8")
         text += f"\n(also as a clickable page: {path})"
     return text
-
-
-def sync_manual_to_sheet(t: "T.Tracker", cfg: dict, ids: list[int]) -> str:
-    """Manual postings go to the sheet right away (with their link) when the sheet is set up and authorised."""
-    client = sheets.authorised_client(cfg, ROOT)
-    if client is None or not ids:
-        return ""
-    urls = [r["canonical_url"] for r in t.by_ids(ids)]
-    try:
-        return f"Google Sheet: {sheets.sync(t, client, urls=urls)}"
-    except sheets.SheetsError as e:
-        return f"(Google Sheet not updated: {e})"
 
 
 def run_discovery(args, cfg: dict) -> int:
@@ -112,13 +101,10 @@ def main() -> int:
                     ap.error("use --approve or --skip, not both at once")
                 ids = D.parse_ids(args.approve or args.skip, available)
                 out = t.decide(ids, approve=bool(args.approve))
-                for label, key in (("approved (queued for the batch runner)", "approved"),
-                                   ("manual (added to the sheet with their links)", "manual"),
+                for label, key in (("approved (python batch.py prepares them)", "approved"),
                                    ("skipped", "skipped"), ("ignored (not on the shortlist)", "ignored")):
                     if out[key]:
                         print(f"{label}: {', '.join(map(str, out[key]))}")
-                if note := sync_manual_to_sheet(t, cfg, out["manual"]):
-                    print(note)
             return 0
         if args.shortlist:
             with T.Tracker(_tracker_file()) as t:

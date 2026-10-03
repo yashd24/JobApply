@@ -51,3 +51,10 @@ discovery:
   delay_between_searches_s: [5, 10]
   # accept_cities: [Bengaluru, Bangalore]   # defaults; also accepted: remote postings located in `country_name`
   # title_include / title_exclude: regexes; see jobbot/discovery.py for the defaults (interns, managers, QA... are dropped)
+
+# Batch runner (python batch.py): prepares the jobs you approved, one at a time. Nothing costs Claude usage until you
+# approve a job. Greenhouse is filled using platforms.greenhouse.mode above (assist: you click Submit); Lever and everything
+# else get a tailored resume, a cover letter and an answer sheet and become "Ready for you" with their link.
+batch:
+  delay_between_jobs_s: [60, 180]   # a random wait in this range between jobs
+  daily_cap: 10                     # jobs started per day; a job stopped by Claude's usage limit does not count

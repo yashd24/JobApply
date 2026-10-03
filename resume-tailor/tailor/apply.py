@@ -189,10 +189,12 @@ def _save_prepare(job_dir: Path, out: dict, job, status: str, requested: str, **
 
 
 def _prepare(job, job_dir: Path, resume_pdf: Path, resume: dict, profile: dict, cover, meta: dict, requested: str,
-             *, opener=None, input_fn=input) -> dict:
+             *, opener=None, input_fn=input, interactive: bool = True) -> dict:
     """Prepare mode: answers computed from the intake questions, no automation browser at all. The user opens the job
     in their normal browser, submits by hand and confirms here; it is recorded as a manual submission."""
-    fields = F.fields_from_questions(job.questions)
+    fields, note = F.fields_from_questions(job.questions), ""
+    if not fields and not interactive:                 # the batch runner: still prepare, with the usual questions
+        fields, note = prepare.generic_fields(), prepare.GENERIC_NOTE
     if not fields:
         raise SystemExit("No questions could be read for this posting, so there is nothing to prepare. "
                          "Try --mode dry-run to look at the live form.")
@@ -204,9 +206,12 @@ def _prepare(job, job_dir: Path, resume_pdf: Path, resume: dict, profile: dict, 
     meta["fields_found"] = len(fields)
     out = A.to_json(answers)
     out["meta"] = meta
-    txt, page = prepare.write_sheet(job_dir, answers, resume_pdf, job)
+    txt, page = prepare.write_sheet(job_dir, answers, resume_pdf, job, note)
     _save_prepare(job_dir, out, job, "prepared", requested)
     _track(job_dir)
+    if not interactive:                                # batch: nothing to open or ask; it is now "Ready for you"
+        print(f"    prepared: {page}")
+        return out
 
     print("4/6 The sheet:\n")
     print(prepare.sheet_text(answers, resume_pdf, job))
@@ -268,7 +273,7 @@ def mark_submitted(job_dir: Path) -> dict:
 def run(url: str, *, mode: "str | None" = None, allow_submit: "str | None" = None, dry_run: bool = False,
         resume_pdf: "Path | None" = None, headless: bool = False, keep_open: bool = False,
         session_factory=None, opener=None, input_fn=input, reapply: bool = False,
-        resume_from: "Path | None" = None) -> dict:
+        resume_from: "Path | None" = None, prepare_interactive: bool = True) -> dict:
     """`session_factory(job_dir) -> BrowserSession` lets tests drive the run with a scripted user; `opener(url)` and
     `input_fn(prompt)` stand in for the default browser and the terminal in prepare mode. `resume_from` is a job
     folder from an earlier run: its tailored resume and cover letter are reused instead of being made again."""
@@ -345,7 +350,7 @@ def run(url: str, *, mode: "str | None" = None, allow_submit: "str | None" = Non
     if used == "prepare":
         try:
             return _prepare(job, job_dir, resume_pdf, resume, profile, cover, meta, requested,
-                            opener=opener, input_fn=input_fn)
+                            opener=opener, input_fn=input_fn, interactive=prepare_interactive)
         except tailor.UsageLimitError as e:
             e.job_dir = e.job_dir or job_dir
             raise

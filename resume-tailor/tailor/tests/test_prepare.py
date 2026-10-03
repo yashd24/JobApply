@@ -46,7 +46,7 @@ class Config(unittest.TestCase):
 
 
 class Prepare(unittest.TestCase):
-    def go(self, replies=("yes",), qs=None, opener=None, pre=None, post=None, reapply=False):
+    def go(self, replies=("yes",), qs=None, opener=None, pre=None, post=None, reapply=False, interactive=True):
         import apply
         import tailor
         job = intake.Job(platform="lever", company="Acme", role="Backend Engineer", location="Bengaluru",
@@ -79,6 +79,7 @@ class Prepare(unittest.TestCase):
                     pre(tmp / "output")
                 try:
                     out = apply.run(CANONICAL, resume_pdf=pdf, input_fn=input_fn, reapply=reapply,
+                                    prepare_interactive=interactive,
                                     opener=opener or (lambda u: opened.append(u) or True))
                 finally:
                     if post:
@@ -177,6 +178,29 @@ class Prepare(unittest.TestCase):
         self.assertIn("--reapply", str(cm.exception))
         out, result, *_ = self.go(pre=pre, reapply=True)           # explicit override
         self.assertEqual(result["status"], "submitted")
+
+    def test_the_batch_variant_opens_nothing_asks_nothing_and_leaves_the_job_ready_for_you(self):
+        from jobbot import tracker
+        seen = {}
+
+        def post(output):
+            with tracker.Tracker(output / "tracker.sqlite3") as t:
+                seen["row"] = dict(t.job(CANONICAL))
+        out, result, files, opened, asked, pdf = self.go(interactive=False, post=post)
+        self.assertEqual((opened, asked), ([], []))
+        self.assertEqual(result["status"], "prepared")
+        self.assertNotEqual(result.get("confirmation"), True)
+        self.assertIn("prepare_sheet.html", files)
+        self.assertEqual(seen["row"]["status"], "ready_for_you")
+        self.assertIn("Mark applied", seen["row"]["reason"])
+
+    def test_when_the_real_form_cannot_be_read_the_batch_variant_prepares_the_usual_questions(self):
+        out, result, files, opened, asked, pdf = self.go(interactive=False, qs=[])
+        self.assertEqual(result["status"], "prepared")
+        self.assertIn("LIKELY ANSWERS", files["prepare_sheet.txt"])
+        self.assertIn("Current CTC", files["prepare_sheet.txt"])
+        with self.assertRaises(SystemExit):                                       # the interactive run still refuses
+            self.go(qs=[])
 
     def test_if_no_browser_can_be_opened_the_run_still_finishes(self):
         out, result, *_ = self.go(opener=lambda u: False)

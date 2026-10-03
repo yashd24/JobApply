@@ -200,7 +200,10 @@ _SENIOR_TITLE = re.compile(
 
 # ─── location, title, age ────────────────────────────────────────────────────
 
-def location_ok(location: str, remote: "bool | None", s: Settings, city_search: bool = False) -> "tuple[bool, str]":
+def location_ok(location: str, remote: "bool | None", s: Settings, city_search: bool = False,
+                text: str = "") -> "tuple[bool, str]":
+    """Bengaluru anywhere; otherwise only if the POSTING ITSELF says remote (JobSpy's is_remote flag, the word "remote" in
+    its location, title or description) and it is in India. `text` is the title plus the description."""
     loc = (location or "").lower()
     if any(c in loc for c in s.accept_cities):
         return True, ""
@@ -208,10 +211,13 @@ def location_ok(location: str, remote: "bool | None", s: Settings, city_search: 
     parts = [p.strip() for p in loc.split(",") if p.strip()]
     if city_search and in_country and parts and parts[0] in s.accept_states:      # "KA, IN" from the Bengaluru search
         return True, ""
-    if s.accept_remote and (remote or "remote" in loc) and (in_country or not loc.strip()):
+    says_remote = bool(remote) or "remote" in loc or bool(re.search(r"\bremote\b", text or "", re.I))
+    if s.accept_remote and says_remote and (in_country or not loc.strip()):
         return True, ""
     shown = location or "no location"
-    return False, f"location '{shown}' is not {'/'.join(c.title() for c in s.accept_cities[:1])} or remote in {s.country_name}"
+    note = "" if says_remote else " (and the posting does not say remote)"
+    return False, (f"location '{shown}' is not {'/'.join(c.title() for c in s.accept_cities[:1])} or remote in "
+                   f"{s.country_name}{note}")
 
 
 def title_ok(title: str, s: Settings) -> "tuple[bool, str]":
@@ -256,6 +262,7 @@ class Found:
                 "role": self.title, "location": self.location, "route": self.route, "source": self.site,
                 "source_url": self.job_url, "direct_url": self.apply_url or None, "experience_asked": self.ask.label,
                 "date_posted": self.date_posted, "notes": f"found by search: {self.search}",
+                "description": (self.description or "")[:30000],
                 "reason": f"found on {self.site} ({self.search}); routes to {self.route}"}
 
 
@@ -468,7 +475,7 @@ def discover(s: Settings, tracker: "T.Tracker | None", *, scrape_fn: "Callable |
         if job.date_posted and (today - date.fromisoformat(job.date_posted)).days > s.max_age_days:
             rep.drop("too old", job, f"posted {job.date_posted}")
             continue
-        ok, why = location_ok(job.location, job.remote, s, job.city_search)
+        ok, why = location_ok(job.location, job.remote, s, job.city_search, f"{job.title}\n{job.description}")
         if not ok:
             rep.drop("location", job, why)
             continue

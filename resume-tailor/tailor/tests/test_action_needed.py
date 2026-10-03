@@ -102,8 +102,8 @@ class Reasons(Base):
         self.assertIn("found", self.t.job(GH)["reason"])
         self.t.decide([a, m], approve=True)
         self.assertIn("batch runner", self.t.job(GH)["reason"])
-        self.assertIn("apply on the employer's page", self.t.job(MANUAL_URL)["reason"])
-        self.assertIn("Mark applied", self.t.job(MANUAL_URL)["reason"])
+        self.assertIn("likely answers", self.t.job(MANUAL_URL)["reason"])
+        self.assertIn("you apply by hand", self.t.job(MANUAL_URL)["reason"])
 
 
 class ActionNeeded(Base):
@@ -115,7 +115,7 @@ class ActionNeeded(Base):
         self.run_folder("dry", "https://job-boards.greenhouse.io/x/jobs/5", "dry_run", mode="dry-run")
         m = self.found(MANUAL_URL, "Web Co")
         self.found("https://webco.example/jobs/2", "Not Yet Co")                   # still only found
-        self.t.decide([m], approve=True)
+        self.t.set_state(m, "manual", "could not be prepared: apply by hand from the link")
         got = [(r["status"], r["company"]) for r in self.t.action_needed()]
         self.assertEqual([s for s, _ in got], ["ready_for_you", "needs_review", "failed", "manual"])
 
@@ -135,7 +135,7 @@ class ActionNeeded(Base):
 
     def test_mark_applied_by_url_for_a_manual_posting_and_for_unknown_ones(self):
         m = self.found(MANUAL_URL, "Web Co")
-        self.t.decide([m], approve=True)
+        self.t.set_state(m, "manual", "could not be prepared: apply by hand from the link")
         self.assertEqual(self.t.mark_applied(MANUAL_URL), "marked")
         self.assertEqual(self.t.job(MANUAL_URL)["status"], "submitted")
         self.assertEqual(self.t.mark_applied(99999), "unknown")
@@ -148,7 +148,7 @@ class ActionTab(Base):
         self.run_folder("prep", LV, "prepared", mode="prepare", company="Hevo Data", role="SDE I")
         self.run_folder("rev", "https://job-boards.greenhouse.io/x/jobs/3", "needs_review", company="Rev Co")
         self.manual = self.found(MANUAL_URL, "Web Co", role="Python Developer")
-        self.t.decide([self.manual], approve=True)
+        self.t.set_state(self.manual, "manual", "could not be prepared: apply by hand, then tick 'Mark applied'")
 
     def rows(self):
         return [r for r in (self.sheet.row(n, TAB, 9) for n in range(2, 12)) if any(c != "" for c in r)]

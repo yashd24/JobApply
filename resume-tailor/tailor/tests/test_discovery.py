@@ -254,6 +254,50 @@ class FirstRealRunFindings(unittest.TestCase):
         t.close()
 
 
+class RemoteMustBeStated(unittest.TestCase):
+    """A result outside Bengaluru stays only if the posting itself says remote."""
+    S = D.load_settings(cfg())
+
+    def test_the_flag_the_location_the_title_or_the_description_can_say_it(self):
+        ok = lambda loc, remote=False, text="": D.location_ok(loc, remote, self.S, False, text)[0]      # noqa: E731
+        self.assertTrue(ok("Pune, India", True))                                          # JobSpy's is_remote flag
+        self.assertTrue(ok("Remote, India"))                                              # the location says it
+        self.assertTrue(ok("Pune, India", False, "Remote Backend Engineer\nBuild APIs."))   # the title says it
+        self.assertTrue(ok("Pune, India", False, "Backend Engineer\nThis role is fully remote within India."))
+        self.assertTrue(ok("Pune, India", False, "Backend Engineer\nWork REMOTE or from our office."))
+
+    def test_otherwise_it_is_dropped_as_location_with_that_reason(self):
+        good, why = D.location_ok("Chennai, Tamil Nadu, India", False, self.S, False, "Backend Engineer\nOffice in Chennai.")
+        self.assertFalse(good)
+        self.assertIn("does not say remote", why)
+        self.assertFalse(D.location_ok("Surat, India", False, self.S, False, "")[0])
+        self.assertFalse(D.location_ok("Hyderabad, India", None, self.S, False, "Hybrid role, remoteness is not offered")[0])
+
+    def test_a_remote_posting_abroad_still_goes(self):
+        self.assertFalse(D.location_ok("Austin, TX, USA", True, self.S, False, "Remote")[0])
+        self.assertFalse(D.location_ok("London, UK", False, self.S, False, "fully remote")[0])
+
+    def test_bengaluru_needs_no_remote_wording(self):
+        self.assertTrue(D.location_ok("Bengaluru, KA, India", False, self.S, False, "Onsite in the office")[0])
+
+    def test_end_to_end_the_description_decides_for_a_non_bengaluru_result(self):
+        t = T.Tracker(Path(tempfile.mkdtemp()) / "t.sqlite3")
+        rows = [row("Backend Engineer", "Stated Co", location="Pune, MH, India", desc="We are remote-first. 1 year of experience."),
+                row("Backend Engineer", "Silent Co", location="Pune, MH, India", desc="Office job in Pune. 1 year of experience.")]
+        rep = D.discover(D.load_settings(cfg()), t, scrape_fn=FakeJobSpy(rows), fetch=fetch_none, sleep=lambda x: None,
+                         today=TODAY, log=lambda *a: None)
+        self.assertEqual([r["company"] for r in t.found()], ["Stated Co"])
+        self.assertEqual([i["company"] for i in rep.dropped["location"]], ["Silent Co"])
+        t.close()
+
+    def test_the_description_is_kept_for_later_preparation(self):
+        t = T.Tracker(Path(tempfile.mkdtemp()) / "t.sqlite3")
+        D.discover(D.load_settings(cfg()), t, scrape_fn=FakeJobSpy([row("Backend Engineer", "Text Co", desc="Build APIs. 1 year of experience.")]),
+                   fetch=fetch_none, sleep=lambda x: None, today=TODAY, log=lambda *a: None)
+        self.assertIn("Build APIs", t.found()[0]["description"])
+        t.close()
+
+
 class Discover(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
@@ -411,11 +455,12 @@ class TrackerFlow(unittest.TestCase):
         except OSError:
             pass
 
-    def test_approve_routes_each_kind_and_only_found_postings_are_affected(self):
+    def test_every_route_is_approved_for_the_batch_runner_and_only_found_postings_are_affected(self):
         out = self.t.decide(list(self.ids.values()) + [9999], approve=True)
-        self.assertEqual((out["approved"], out["manual"]), ([self.ids["A"], self.ids["B"]], [self.ids["C"]]))
+        self.assertEqual(out["approved"], [self.ids["A"], self.ids["B"], self.ids["C"]])
+        self.assertNotIn("manual", out)
         self.assertEqual(out["ignored"], [9999])
-        self.assertEqual([r["company"] for r in self.t.approved()], ["A", "B"])
+        self.assertEqual([r["company"] for r in self.t.approved()], ["A", "B", "C"])
         self.assertEqual(self.t.found(), [])
         again = self.t.decide([self.ids["A"]], approve=True)                                # already decided
         self.assertEqual(again["ignored"], [self.ids["A"]])
@@ -437,6 +482,7 @@ class TrackerFlow(unittest.TestCase):
 
     def test_the_sheet_gets_manual_postings_but_not_found_approved_or_skipped_ones(self):
         self.t.decide([self.ids["C"], self.ids["A"]], approve=True)
+        self.t.set_state(self.ids["C"], "manual", "could not be prepared: apply by hand from the link")
         self.t.decide([self.ids["B"]], approve=False)
         from test_sheets import FakeSheet
         sheet = FakeSheet()

@@ -30,9 +30,35 @@ def _note(a: "A.Answer") -> str:
     return ""
 
 
-def sheet_text(answers: "list[A.Answer]", resume_pdf: Path, job) -> str:
+GENERIC_NOTE = ("LIKELY ANSWERS: this application form was not read (it is not on Greenhouse or Lever), so these are the "
+                "questions such forms usually ask, answered from your profile and resume. Custom questions on the real "
+                "form are yours to answer.")
+
+
+def generic_fields() -> "list":
+    """The questions a typical application form asks, for a posting whose real form cannot be read."""
+    from jobbot.fields import Field
+    spec = [("first_name", "First name", "text", True), ("last_name", "Last name", "text", True),
+            ("email", "Email", "email", True), ("phone", "Phone", "tel", True),
+            ("location", "Current location", "text", True), ("linkedin", "LinkedIn profile", "url", False),
+            ("github", "GitHub profile", "url", False), ("website", "Portfolio / website", "url", False),
+            ("company", "Current company", "text", False), ("title", "Current job title", "text", False),
+            ("experience", "Total years of experience", "text", True), ("notice", "Notice period", "text", True),
+            ("start", "Earliest start date", "text", False), ("ctc_now", "Current CTC", "text", False),
+            ("ctc_next", "Expected CTC", "text", True),
+            ("auth", "Are you legally authorized to work in India?", "text", False),
+            ("sponsor", "Will you require visa sponsorship?", "text", False),
+            ("relocate", "Are you willing to relocate?", "text", False),
+            ("heard", "How did you hear about this job?", "text", False),
+            ("degree", "Highest degree", "text", False), ("college", "College / university", "text", False),
+            ("grad", "Graduation year", "text", False),
+            ("resume", "Resume/CV", "file", True), ("cover", "Cover letter", "textarea", False)]
+    return [Field(key=k, label=label, type=t, required=req) for k, label, t, req in spec]
+
+
+def sheet_text(answers: "list[A.Answer]", resume_pdf: Path, job, note: str = "") -> str:
     lines = [f"{job.company} | {job.role} | {job.location}", f"Apply at: {job.apply_url}",
-             f"Resume PDF: {resume_pdf}", "", "Answers in form order (* = required):", ""]
+             f"Resume PDF: {resume_pdf}"] + ([note] if note else []) + ["", "Answers in form order (* = required):", ""]
     for i, a in enumerate(answers, 1):
         value = display_value(a)
         lines.append(f"{i:>2}. {'*' if a.required else ' '} {a.label}")
@@ -59,7 +85,7 @@ getSelection().removeAllRanges();getSelection().addRange(r);document.execCommand
 b.textContent='Copied';setTimeout(()=>b.textContent='Copy',1200)});"""
 
 
-def sheet_html(answers: "list[A.Answer]", resume_pdf: Path, job) -> str:
+def sheet_html(answers: "list[A.Answer]", resume_pdf: Path, job, banner: str = "") -> str:
     e = html.escape
     rows = []
     for i, a in enumerate(answers, 1):
@@ -73,19 +99,21 @@ def sheet_html(answers: "list[A.Answer]", resume_pdf: Path, job) -> str:
             body += f'<div class="note">{e(note)}</div>'
         rows.append(f'<div class="{cls}"><span class="label">{i}. {e(a.label)}</span>'
                     f'{"<span class=req> *</span>" if a.required else ""}{body}</div>')
+    banner_html = f'<div class="row you"><span class="note">{e(banner)}</span></div>' if banner else ""
     return (f'<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width">'
             f"<title>Answers for {e(job.company)}</title><style>{_CSS}</style></head><body>"
             f"<h1>{e(job.company)}: {e(job.role)}</h1>"
             f'<div class="meta">{e(job.location)}<br>Apply at: <a href="{e(job.apply_url)}">{e(job.apply_url)}</a></div>'
+            f'{banner_html}'
             f'<div class="row"><span class="label">Resume PDF (upload this)</span>'
             f'<div class="val" id="pdf">{e(str(resume_pdf))}</div><button data-copy="pdf">Copy</button></div>'
             f'{"".join(rows)}<script>{_JS}</script></body></html>')
 
 
-def write_sheet(job_dir: Path, answers, resume_pdf: Path, job) -> "tuple[Path, Path]":
+def write_sheet(job_dir: Path, answers, resume_pdf: Path, job, note: str = "") -> "tuple[Path, Path]":
     txt, page = job_dir / "prepare_sheet.txt", job_dir / "prepare_sheet.html"
-    txt.write_text(sheet_text(answers, resume_pdf, job), encoding="utf-8")
-    page.write_text(sheet_html(answers, resume_pdf, job), encoding="utf-8")
+    txt.write_text(sheet_text(answers, resume_pdf, job, note), encoding="utf-8")
+    page.write_text(sheet_html(answers, resume_pdf, job, note), encoding="utf-8")
     return txt, page
 
 

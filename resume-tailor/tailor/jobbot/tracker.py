@@ -26,6 +26,8 @@ CREATE TABLE IF NOT EXISTS jobs (
   location TEXT, status TEXT NOT NULL, mode TEXT, submitted_by TEXT, score INTEGER, gaps TEXT, resume_pdf TEXT,
   answers_path TEXT, screenshots TEXT, flagged_fields TEXT, created_at TEXT, submitted_at TEXT, notes TEXT,
   runs INTEGER DEFAULT 0);
+CREATE TABLE IF NOT EXISTS batch_log (
+  id INTEGER PRIMARY KEY AUTOINCREMENT, job_id INTEGER, started_at TEXT NOT NULL, finished_at TEXT, outcome TEXT);
 """
 # The statuses a posting moves through. "ready_for_you" is what a run's own "prepared" becomes: the bot has done its part
 # and the next step is yours. dry_run is internal (a rehearsal), never an application.
@@ -65,7 +67,7 @@ def run_reason(status: str, res: dict, answers: dict) -> str:
 # Columns added for job discovery (existing databases are migrated in place).
 DISCOVERY_COLUMNS = {"route": "TEXT", "source": "TEXT", "source_url": "TEXT", "direct_url": "TEXT",
                      "experience_asked": "TEXT", "fingerprint": "TEXT", "date_posted": "TEXT", "last_seen": "TEXT",
-                     "reason": "TEXT", "job_folder": "TEXT"}
+                     "reason": "TEXT", "job_folder": "TEXT", "description": "TEXT"}
 _LEGAL_SUFFIX = re.compile(r"\b(pvt|private|ltd|limited|inc|llc|llp|corp|corporation|india|co)\b")
 
 
@@ -182,7 +184,7 @@ class Tracker:
                 "location": rec.get("location"), "route": rec.get("route"), "source": rec.get("source"),
                 "source_url": rec.get("source_url"), "direct_url": rec.get("direct_url"),
                 "experience_asked": rec.get("experience_asked"), "date_posted": rec.get("date_posted"),
-                "notes": rec.get("notes"), "fingerprint": fp,
+                "notes": rec.get("notes"), "fingerprint": fp, "description": rec.get("description"),
                 "reason": rec.get("reason") or rec.get("notes") or f"found on {rec.get('source') or 'a job board'}"}
         existing = self.db.execute("SELECT * FROM jobs WHERE canonical_url=?", (url,)).fetchone()
         if existing:
@@ -223,17 +225,20 @@ class Tracker:
         return self.db.execute(f"SELECT * FROM jobs WHERE id IN ({marks}) ORDER BY id", list(ids)).fetchall() if ids else []
 
     def decide(self, ids: list[int], approve: bool) -> dict:
-        """Approve or skip shortlisted postings (only ones still in status found). An approved ATS posting waits for the
-        batch runner ("approved"); an approved manual one goes straight to the sheet as "manual" with its link."""
-        out = {"approved": [], "manual": [], "skipped": [], "ignored": []}
+        """Approve or skip shortlisted postings (only ones still in status found). EVERY approved posting waits for the
+        batch runner ("approved"), which prepares it (Greenhouse is filled in assist mode; everything else gets a tailored
+        resume, a cover letter and an answer sheet and becomes "Ready for you"). Nothing costs Claude usage before
+        this approval."""
+        out = {"approved": [], "skipped": [], "ignored": []}
         for r in self.by_ids(ids):
             if r["status"] != "found":
                 out["ignored"].append(r["id"])
                 continue
-            new = ("manual" if r["route"] == "manual" else "approved") if approve else "skipped"
-            why = {"manual": "no direct Greenhouse or Lever link: apply on the employer's page (link in the sheet), then "
-                             "tick 'Mark applied'",
-                   "approved": "approved: waits for the batch runner", "skipped": "declined from the shortlist"}[new]
+            new = "approved" if approve else "skipped"
+            why = ({"greenhouse": "approved: the batch runner will fill it in assist mode and you click Submit",
+                    "lever": "approved: the batch runner prepares the resume, cover letter and answers; you apply by hand"}
+                   .get(r["route"], "approved: the batch runner prepares a tailored resume, cover letter and likely answers; "
+                                    "you apply by hand") if approve else "declined from the shortlist")
             self.db.execute("UPDATE jobs SET status=?, reason=? WHERE id=?", (new, why, r["id"]))
             out[new].append(r["id"])
         out["ignored"] += [i for i in ids if i not in {r["id"] for r in self.by_ids(ids)}]
@@ -268,7 +273,34 @@ class Tracker:
         return "marked"
 
     def approved(self) -> list[sqlite3.Row]:
-        return self.db.execute("SELECT * FROM jobs WHERE status='approved' ORDER BY id").fetchall()
+        """Approved postings for the batch runner: ones with a saved job folder (a run stopped part-way) first."""
+        return self.db.execute("SELECT * FROM jobs WHERE status='approved' ORDER BY (job_folder IS NULL), id").fetchall()
+
+    def set_state(self, job_id: int, status: str, reason: str, job_folder: "str | None" = None) -> None:
+        """Record a state that no run folder can express (a posting that could not be prepared, a batch that was stopped)."""
+        if job_folder is None:
+            self.db.execute("UPDATE jobs SET status=?, reason=? WHERE id=?", (status, reason, job_id))
+        else:
+            self.db.execute("UPDATE jobs SET status=?, reason=?, job_folder=? WHERE id=?", (status, reason, job_folder, job_id))
+        self.db.commit()
+
+    # ── the batch runner's log: the daily cap counts from here ──
+    def batch_start(self, job_id: int) -> int:
+        cur = self.db.execute("INSERT INTO batch_log (job_id, started_at) VALUES (?, ?)",
+                              (job_id, datetime.now().isoformat(timespec="seconds")))
+        self.db.commit()
+        return cur.lastrowid
+
+    def batch_finish(self, log_id: int, outcome: str) -> None:
+        self.db.execute("UPDATE batch_log SET finished_at=?, outcome=? WHERE id=?",
+                        (datetime.now().isoformat(timespec="seconds"), outcome, log_id))
+        self.db.commit()
+
+    def batch_count_today(self, today: "datetime | None" = None) -> int:
+        """Jobs the batch runner started today. A job stopped by the usage limit does not count: it will be resumed."""
+        day = (today or datetime.now()).strftime("%Y-%m-%d")
+        return self.db.execute("SELECT COUNT(*) FROM batch_log WHERE substr(started_at, 1, 10)=? "
+                               "AND COALESCE(outcome, '') != 'usage_limit'", (day,)).fetchone()[0]
 
     def import_existing(self, output_dir: Path) -> int:
         n = 0
