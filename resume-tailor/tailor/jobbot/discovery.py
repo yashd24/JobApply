@@ -309,6 +309,33 @@ def description_ok(title: str, description: str, s: Settings) -> "tuple[bool, st
     return True, ""
 
 
+def fill_descriptions(tracker, fetch, *, limit: int = 60, sleep=lambda s: None, delay_s: float = 1.0, log=print,
+                      min_chars: int = 200, save: bool = True) -> dict:
+    """Fetch the description of Found postings that have none (HTTP only, no Claude), BEFORE they are scored: the scorer
+    can only judge honestly from text, and the experience/embedded rules need it too. `fetch(url)` returns text or None."""
+    rows = tracker.without_description(min_chars)
+    tried = filled = 0
+    for r in rows[:max(limit, 0)]:
+        tried += 1
+        text = None
+        for url in dict.fromkeys(u for u in (r["source_url"], r["canonical_url"]) if u):
+            try:
+                text = fetch(url)
+            except Exception:
+                text = None
+            if text and len(text.strip()) >= min_chars:
+                break
+            text = None
+        if text:
+            if save:
+                tracker.set_description(r["id"], text.strip())
+            filled += 1
+        sleep(delay_s)
+    left = len(tracker.without_description(min_chars)) - (0 if save else filled)
+    log(f"  descriptions: {filled} {'fetched' if save else 'could be fetched'} of {tried} tried; {left} still have none")
+    return {"tried": tried, "filled": filled, "still_missing": left}
+
+
 def recheck_found(tracker, s: Settings, log=print) -> list[dict]:
     """Apply the CURRENT title, experience and description rules to postings that are only Found (no decision made), using
     the text already stored, and forget the ones that no longer pass. For when the rules or the parser changed: no new
@@ -369,7 +396,7 @@ class Found:
         return {"canonical_url": self.canonical_url, "platform": self.platform or self.site, "company": self.company,
                 "role": self.title, "location": self.location, "route": self.route, "source": self.site,
                 "source_url": self.job_url, "direct_url": self.apply_url or None, "experience_asked": self.ask.label,
-                "date_posted": self.date_posted, "notes": f"found by search: {self.search}",
+                "date_posted": self.date_posted, "notes": f"found by search: {self.search}", "remote": self.remote,
                 "description": (self.description or "")[:30000],
                 "reason": f"found on {self.site} ({self.search}); routes to {self.route}"}
 

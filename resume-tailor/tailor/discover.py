@@ -93,6 +93,12 @@ def main() -> int:
     ap.add_argument("--term", action="append", help="use only this search term (repeatable)")
     ap.add_argument("--results", type=int, help="results per search (overrides config)")
     ap.add_argument("--why", action="store_true", help="also print every dropped posting with its reason")
+    ap.add_argument("--fill-descriptions", action="store_true",
+                    help="fetch the missing descriptions of Found postings (HTTP only, no Claude), then exit "
+                         "(with --dry-run: only count what could be fetched)")
+    ap.add_argument("--board-check", action="store_true",
+                    help="strict company-board check of scored Found postings against Greenhouse/Lever, then exit "
+                         "(with --dry-run: show the matches and their evidence, change nothing)")
     ap.add_argument("--recheck", action="store_true",
                     help="re-judge the postings that are only Found by the CURRENT rules (no scraping, no Claude), then exit")
     ap.add_argument("--reset-found", action="store_true",
@@ -101,6 +107,20 @@ def main() -> int:
     args = ap.parse_args()
     try:
         cfg = cfgmod.load_config(CONFIG_FILE)
+        if args.fill_descriptions:
+            import batch
+            with T.Tracker(_tracker_file()) as t:
+                D.fill_descriptions(t, batch.fetch_description, sleep=__import__("time").sleep, save=not args.dry_run)
+            return 0
+        if args.board_check:
+            from jobbot import boardcheck
+            with T.Tracker(_tracker_file()) as t:
+                sel = cfg.get("selection") or {}
+                rep = boardcheck.check_found(t, D.load_settings(cfg), dry_run=args.dry_run,
+                                             min_relevance=int(sel.get("board_check_min_relevance", 5)),
+                                             max_companies=int(sel.get("board_check_max_companies", 150)))
+                print(f"{rep.checked} checked, {len(rep.rerouted)} matched" + (" (dry run: nothing changed)" if args.dry_run else ""))
+            return 0
         if args.recheck:
             with T.Tracker(_tracker_file()) as t:
                 gone = D.recheck_found(t, D.load_settings(cfg))

@@ -65,7 +65,7 @@ class Base(unittest.TestCase):
             return {"scores": out}
         return llm
 
-    def go(self, *, discover_fn=None, llm=None, process=None, sync_fn=None, cfg=None, **kw):
+    def go(self, *, discover_fn=None, llm=None, process=None, sync_fn=None, cfg=None, fetch_text=None, board_http=None, **kw):
         def default_process(row):
             self.steps.append(f"process {row['company']}")
             self.tr.set_state(row["id"], "ready_for_you", "ready")
@@ -73,7 +73,8 @@ class Base(unittest.TestCase):
         return run.run_all(cfg or CFG, self.tr, discover_fn=discover_fn, llm=llm or self.scorer(),
                            profile_loader=persona.profile, resume_loader=persona.resume,
                            process=process or default_process, sync_fn=sync_fn or (lambda tr: self.steps.append("sync") or "synced"),
-                           sleep=lambda s: self.steps.append("wait"), rng=random.Random(1),
+                           sleep=lambda s: self.steps.append("wait") if s == 0 else None, rng=random.Random(1),
+                           fetch_text=fetch_text or (lambda url: None), board_http=board_http or (lambda url: (404, "")),
                            log=lambda *a: self.logs.append(" ".join(map(str, a))), **kw)
 
     def row(self, jid):

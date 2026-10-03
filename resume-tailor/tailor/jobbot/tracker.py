@@ -10,7 +10,7 @@ from __future__ import annotations
 import json
 import sqlite3
 import re
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 
 from jobbot import intake
@@ -70,17 +70,21 @@ def run_reason(status: str, res: dict, answers: dict) -> str:
 DISCOVERY_COLUMNS = {"route": "TEXT", "source": "TEXT", "source_url": "TEXT", "direct_url": "TEXT",
                      "experience_asked": "TEXT", "fingerprint": "TEXT", "date_posted": "TEXT", "last_seen": "TEXT",
                      "reason": "TEXT", "job_folder": "TEXT", "description": "TEXT",
-                     "relevance": "INTEGER", "relevance_reason": "TEXT"}
+                     "relevance": "INTEGER", "relevance_reason": "TEXT", "remote": "INTEGER",
+                     "route_evidence": "TEXT", "board_checked": "TEXT"}
 _LEGAL_SUFFIX = re.compile(r"\b(pvt|private|ltd|limited|inc|llc|llp|corp|corporation|india|co)\b")
+
+
+def norm_text(text: "str | None") -> str:
+    """Lower case, parentheticals and punctuation removed, legal suffixes (Pvt, Ltd, Inc...) dropped, spaces squeezed."""
+    t = re.sub(r"\([^)]*\)", " ", str(text or "").lower())
+    t = _LEGAL_SUFFIX.sub(" ", re.sub(r"[^a-z0-9+#]+", " ", t))
+    return re.sub(r"\s+", " ", t).strip()
 
 
 def fingerprint(company: "str | None", role: "str | None") -> str:
     """The same opening listed on two sites: lower-case company and title without punctuation or legal suffixes."""
-    def norm(text: "str | None") -> str:
-        t = re.sub(r"\([^)]*\)", " ", str(text or "").lower())
-        t = _LEGAL_SUFFIX.sub(" ", re.sub(r"[^a-z0-9+#]+", " ", t))
-        return re.sub(r"\s+", " ", t).strip()
-    return f"{norm(company)}|{norm(role)}"
+    return f"{norm_text(company)}|{norm_text(role)}"
 
 
 def key(url: str) -> str:
@@ -188,6 +192,7 @@ class Tracker:
                 "source_url": rec.get("source_url"), "direct_url": rec.get("direct_url"),
                 "experience_asked": rec.get("experience_asked"), "date_posted": rec.get("date_posted"),
                 "notes": rec.get("notes"), "fingerprint": fp, "description": rec.get("description"),
+                "remote": None if rec.get("remote") is None else int(bool(rec.get("remote"))),
                 "reason": rec.get("reason") or rec.get("notes") or f"found on {rec.get('source') or 'a job board'}"}
         existing = self.db.execute("SELECT * FROM jobs WHERE canonical_url=?", (url,)).fetchone()
         if existing:
@@ -238,6 +243,41 @@ class Tracker:
         return self.db.execute(
             "SELECT * FROM jobs WHERE status='found' AND relevance >= ? "
             "ORDER BY relevance DESC, COALESCE(date_posted, '') DESC, id LIMIT ?", (int(threshold), max(0, int(limit)))).fetchall()
+
+    def set_description(self, job_id: int, text: str) -> None:
+        self.db.execute("UPDATE jobs SET description=? WHERE id=?", (text[:30000], job_id))
+        self.db.commit()
+
+    def without_description(self, min_chars: int = 200) -> list[sqlite3.Row]:
+        """Found postings whose stored description is missing or too short to judge."""
+        return self.db.execute("SELECT * FROM jobs WHERE status='found' AND LENGTH(TRIM(COALESCE(description, ''))) < ? "
+                               "ORDER BY id", (int(min_chars),)).fetchall()
+
+    def board_candidates(self, min_relevance: int, recheck_days: int = 7, today: "datetime | None" = None) -> list[sqlite3.Row]:
+        """Scored Found postings on the manual route that have not had the company-board check in `recheck_days`."""
+        cutoff = ((today or datetime.now()) - timedelta(days=recheck_days)).strftime("%Y-%m-%d")
+        return self.db.execute(
+            "SELECT * FROM jobs WHERE status='found' AND route='manual' AND relevance >= ? "
+            "AND (board_checked IS NULL OR board_checked < ?) ORDER BY relevance DESC, id", (int(min_relevance), cutoff)).fetchall()
+
+    def set_board_checked(self, job_id: int, evidence_json: str, day: str) -> None:
+        self.db.execute("UPDATE jobs SET route_evidence=?, board_checked=? WHERE id=?", (evidence_json, day, job_id))
+        self.db.commit()
+
+    def reroute(self, job_id: int, platform: str, canonical_url: str, reason: str) -> str:
+        """Move a Found manual posting onto its Greenhouse/Lever posting (the board check confirmed it). Returns "rerouted",
+        or "duplicate" when that exact posting is already in the tracker (then this one is skipped, never applied twice)."""
+        url = key(canonical_url)
+        other = self.db.execute("SELECT id, status FROM jobs WHERE canonical_url=? AND id!=?", (url, job_id)).fetchone()
+        if other:
+            self.db.execute("UPDATE jobs SET status='skipped', reason=? WHERE id=? AND status='found'",
+                            (f"the same posting is already in the tracker as {label(other['status'])}", job_id))
+            self.db.commit()
+            return "duplicate"
+        self.db.execute("UPDATE jobs SET canonical_url=?, platform=?, route=?, direct_url=?, reason=? "
+                        "WHERE id=? AND status='found'", (url, platform, platform, url, reason, job_id))
+        self.db.commit()
+        return "rerouted"
 
     def delete_found_ids(self, ids: list[int]) -> int:
         """Forget these postings, but only while they are still just Found."""

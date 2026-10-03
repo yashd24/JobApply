@@ -39,7 +39,7 @@ import tailor
 from jobbot import config as cfgmod
 from jobbot import discovery as D
 from jobbot import profile as P
-from jobbot import relevance, sheets
+from jobbot import boardcheck, relevance, sheets
 from jobbot import tracker as T
 
 ROOT = Path(__file__).resolve().parent
@@ -81,6 +81,20 @@ def threshold_of(cfg: dict) -> int:
         return int(((cfg or {}).get("selection") or {}).get("relevance_threshold", DEFAULT_THRESHOLD))
     except (TypeError, ValueError):
         raise cfgmod.ConfigError("selection.relevance_threshold must be a whole number") from None
+
+
+def selection_of(cfg: dict) -> dict:
+    """The selection knobs, with their defaults."""
+    sel = (cfg or {}).get("selection") or {}
+    try:
+        return {"threshold": threshold_of(cfg),
+                "fetch_missing_descriptions": bool(sel.get("fetch_missing_descriptions", True)),
+                "max_description_fetches": int(sel.get("max_description_fetches", 60)),
+                "board_check": bool(sel.get("board_check", True)),
+                "board_check_min_relevance": int(sel.get("board_check_min_relevance", 5)),
+                "board_check_max_companies": int(sel.get("board_check_max_companies", 150))}
+    except (TypeError, ValueError) as e:
+        raise cfgmod.ConfigError(f"selection: a number is not a number ({e})") from None
 
 
 def greenhouse_mode_of(cfg: dict) -> str:
@@ -137,14 +151,15 @@ def format_scored(rows, threshold: int, cfg: "dict | None" = None) -> str:
 
 def run_all(cfg: dict, tr: "T.Tracker", *, dry_run: bool = False, skip_discovery: bool = False, discover_fn=None, llm=None,
             profile_loader=None, resume_loader=None, process=None, sync_fn=None, sleep=time.sleep,
-            rng: "random.Random | None" = None, now=datetime.now, log=print) -> dict:
+            rng: "random.Random | None" = None, now=datetime.now, log=print, fetch_text=None, board_http=None) -> dict:
     """The whole flow. Returns the run summary. A Claude usage limit ends the Claude steps cleanly (the rest still
     happens: sheet sync, summary); a problem in one step is recorded and does not abort the others."""
     started = now()
     llm = llm or tailor.call_claude
     profile_loader = profile_loader or (lambda: P.load_profile(apply.PROFILE_FILE))
     resume_loader = resume_loader or tailor.load_resume_data
-    settings, threshold = batch.load_settings(cfg), threshold_of(cfg)
+    settings, sel = batch.load_settings(cfg), selection_of(cfg)
+    threshold = sel["threshold"]
     s: dict = {"date": started.strftime("%Y-%m-%d"), "started": started.isoformat(timespec="seconds"), "dry_run": dry_run,
                "scraped": 0, "dropped": {}, "found_new": 0, "already_tracked": 0, "scored": 0, "unscored_left": 0,
                "approved": 0, "submitted": 0, "ready_for_you": 0, "needs_review": 0, "manual": 0, "failed": 0,
@@ -180,9 +195,23 @@ def run_all(cfg: dict, tr: "T.Tracker", *, dry_run: bool = False, skip_discovery
     except D.DiscoveryError as e:
         s["errors"].append(f"recheck: {e}")
 
+    # 2c. postings with no description get one (HTTP only) BEFORE scoring: the scorer and the rules judge from text
+    s["descriptions"] = {"tried": 0, "filled": 0, "still_missing": 0}
+    if sel["fetch_missing_descriptions"]:
+        log("2/6 Fetching missing descriptions (HTTP only, no Claude)...")
+        try:
+            s["descriptions"] = D.fill_descriptions(tr, fetch_text or batch.fetch_description, sleep=sleep, log=log,
+                                                    limit=sel["max_description_fetches"])
+            if s["descriptions"]["filled"]:                     # new text can reveal "5+ years" or firmware work
+                for g in D.recheck_found(tr, D.load_settings(cfg), log=log):
+                    key = f"rechecked: {g['kind']}"
+                    s["dropped"][key] = s["dropped"].get(key, 0) + 1
+        except Exception as e:
+            s["errors"].append(f"descriptions: {type(e).__name__}: {str(e)[:160]}")
+
     # 3. relevance score (one Claude call per 10 postings)
     todo = len(tr.unscored())
-    log(f"2/5 Scoring {todo} posting(s) that have no relevance score yet (one Claude call per 10)...")
+    log(f"3/6 Scoring {todo} posting(s) that have no relevance score yet (one Claude call per 10)...")
     if todo:
         try:
             rep = relevance.score_unscored(tr, llm, resume_loader(), profile_loader(), log=log)
@@ -194,6 +223,18 @@ def run_all(cfg: dict, tr: "T.Tracker", *, dry_run: bool = False, skip_discovery
             s["errors"].append(f"scoring: {type(e).__name__}: {str(e)[:160]}")
             log(f"  scoring failed: {s['errors'][-1]}")
     s["unscored_left"] = len(tr.unscored())
+
+    # 3b. the strict company-board check: a manual posting that is really a Greenhouse/Lever one moves onto that route
+    s["board_check"] = {"checked": 0, "matched": 0, "rerouted": []}
+    if sel["board_check"]:
+        log("4/6 Company-board check (Greenhouse/Lever public APIs, read-only; same company + title + location, confirmed live)...")
+        try:
+            bc = boardcheck.check_found(tr, D.load_settings(cfg), min_relevance=sel["board_check_min_relevance"],
+                                        max_companies=sel["board_check_max_companies"], http=board_http, sleep=sleep, log=log,
+                                        now=now)
+            s["board_check"] = {"checked": bc.checked, "matched": len(bc.rerouted), "rerouted": bc.rerouted}
+        except Exception as e:
+            s["errors"].append(f"board check: {type(e).__name__}: {str(e)[:160]}")
     found_rows = tr.found()
     log("\n" + format_scored([r for r in found_rows if r["relevance"] is not None], threshold, cfg) + "\n")
 
@@ -205,12 +246,12 @@ def run_all(cfg: dict, tr: "T.Tracker", *, dry_run: bool = False, skip_discovery
         s["would_approve"] = [{"id": r["id"], "company": r["company"], "role": r["role"], "relevance": r["relevance"],
                                "route": r["route"], "reason": r["relevance_reason"]} for r in would]
     elif not s["stopped"]:
-        log("3/5 Approving the most relevant postings (up to the daily cap)...")
+        log("5/6 Approving the most relevant postings (up to the daily cap)...")
         chosen = auto_approve(tr, threshold, settings.daily_cap, log)
         s["approved"] = len(chosen)
         for r in chosen:
             log(f"  approved #{r['id']} [{r['relevance']}] {r['company']} | {r['role']}  ({D.route_label(r, cfg)})")
-        log(f"4/5 Processing {len(tr.approved())} approved job(s), one at a time...")
+        log(f"6/6 Processing {len(tr.approved())} approved job(s), one at a time...")
         process = process or batch.make_processor(tr, cfg, unattended=True, greenhouse_mode=greenhouse_mode_of(cfg),
                                                   profile_loader=profile_loader, resume_loader=resume_loader)
         rep = batch.run_batch(tr, cfg, settings, process=process, sleep=sleep, rng=rng, log=log)
@@ -223,10 +264,10 @@ def run_all(cfg: dict, tr: "T.Tracker", *, dry_run: bool = False, skip_discovery
             s["stopped"] = rep.stopped
             log(f"\n{rep.stopped}")
     else:
-        log("3/5 Approval and processing skipped: " + s["stopped"])
+        log("5/6 Approval and processing skipped: " + s["stopped"])
 
     # 5. sync the sheet
-    log("5/5 Syncing the Google Sheet...")
+    log("Syncing the Google Sheet...")
     try:
         if sync_fn:
             note = sync_fn(tr)
@@ -271,6 +312,15 @@ def format_summary(s: dict) -> str:
              f"  approved {s['approved']}; submitted {s['submitted']}; ready for you {s['ready_for_you']}; "
              f"needs review {s['needs_review']}" + (f"; manual {s['manual']}" if s["manual"] else "") +
              (f"; failed {s['failed']}" if s["failed"] else "")]
+    d = s.get("descriptions") or {}
+    if d.get("tried"):
+        lines.append(f"  descriptions fetched {d['filled']} of {d['tried']} missing ({d['still_missing']} still without)")
+    bc = s.get("board_check") or {}
+    if bc.get("checked"):
+        lines.append(f"  board check: {bc['checked']} checked, {bc['matched']} re-routed onto Greenhouse/Lever")
+        for m in bc.get("rerouted", []):
+            lines.append(f"    #{m['id']} -> {m.get('platform')} {m.get('url')}  (company {m['company']['theirs']!r}, "
+                         f"title {m['title']['theirs']!r}, {m['location']['rule']})")
     if s.get("would_approve") is not None:
         lines.append(f"  would approve now: {len(s['would_approve'])}")
     for j in s["jobs"]:

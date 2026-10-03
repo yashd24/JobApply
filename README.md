@@ -259,6 +259,11 @@ Claude usage limit stops the run cleanly and the next run resumes. See `plan.md`
 rests on. The selection rules and term lists live in `config.yaml` under `discovery:`; the shortlist is also written
 as data to `output/shortlist.json` (the Google Sheet is the main view).
 
+**Descriptions and the board check.** Before scoring, a Found posting with no description gets one fetched (HTTP only).
+After scoring, a posting with no employer link is looked up on the company's Greenhouse/Lever board and moved onto it
+ONLY if the company, title (every word), location and a live job all match and exactly one job fits; the evidence is
+logged and kept (`discover.py --board-check --dry-run` previews it). Anything weaker stays on its route.
+
 ### Schedule it daily (Windows Task Scheduler)
 
 The task needs a logged-in desktop (the browser window opens), the PC awake, and `xelatex` and `claude` on your PATH

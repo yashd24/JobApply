@@ -78,6 +78,13 @@ discovery:
 # against your resume and profile, with a one-line reason. A posting at or above the threshold is auto-approved.
 selection:
   relevance_threshold: 7
+  fetch_missing_descriptions: true   # fetch a missing description (HTTP only) before scoring; max per run below
+  max_description_fetches: 60
+  # Strict company-board check: a scored posting with no employer link moves onto Greenhouse/Lever ONLY when the same
+  # company, the same title and the same location are live there (evidence is logged); anything weaker stays as it is.
+  board_check: true
+  board_check_min_relevance: 5       # only postings scored at least this are checked
+  board_check_max_companies: 150     # at most this many different companies per run
 
 # Unattended runs (python run.py). greenhouse_mode: auto submits when every required field is filled and nothing is flagged;
 # anything else is prepared and marked Needs review. Everything not on Greenhouse is prepared and marked Ready for you.
