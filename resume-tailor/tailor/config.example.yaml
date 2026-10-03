@@ -64,6 +64,10 @@ discovery:
                         angular developer, vue developer, mobile, android, ios, flutter, react native, devops, dev ops, sre,
                         site reliability, embedded, firmware, fpga, vlsi, rtos, bsp, hardware, device driver]
   # A description mentioning this many DIFFERENT embedded/hardware terms is dropped
+  # Recruiting platforms / staffing firms / aggregators (not the employer). aggregator_action: cap = still scored but never
+  # above 6 (so never auto-approved); drop = removed before scoring. Matched against the company name.
+  aggregator_action: cap
+  aggregators: [Uplers, Ibrowsejobs, Jobgether, Talent500, Turing, Talentzo, Staffing Mart]
   embedded_min_terms: 2
   embedded_terms: [i2c, spi, uart, firmware, rtos, microcontroller, embedded c, bsp, fpga, verilog, vhdl, device driver,
                    can bus, bootloader, yocto, embedded linux, arm cortex, linux kernel]

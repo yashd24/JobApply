@@ -214,7 +214,8 @@ def run_all(cfg: dict, tr: "T.Tracker", *, dry_run: bool = False, skip_discovery
     log(f"3/6 Scoring {todo} posting(s) that have no relevance score yet (one Claude call per 10)...")
     if todo:
         try:
-            rep = relevance.score_unscored(tr, llm, resume_loader(), profile_loader(), log=log)
+            rep = relevance.score_unscored(tr, llm, resume_loader(), profile_loader(), log=log,
+                                           rules=relevance.rules_from_config(cfg))
             s["scored"] = rep.scored
             s["errors"] += rep.problems
         except tailor.UsageLimitError as e:

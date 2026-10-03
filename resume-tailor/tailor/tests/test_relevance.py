@@ -215,5 +215,184 @@ class TrackerSupport(Base):
         self.assertEqual(len([n for n in range(2, 6) if sheet.row(n)[3]]), 2)           # the knob lowers the bar
 
 
+class ScoringRules(Base):
+    """2026-10-04 fixes: the score is capped in CODE by experience, missing company, aggregators, its own caveats and Java."""
+
+    RULES = R.Rules()
+
+    def row(self, title="Backend Engineer", company="Acme Co", exp="1-2 yrs", desc="Python and Django APIs. " * 10):
+        self._n = getattr(self, "_n", 0) + 1
+        return {"id": self._n, "company": company, "role": title, "experience_asked": exp, "description": desc,
+                "location": "Bengaluru"}
+
+    def score(self, row, score, reason="Python/Django APIs match the resume.", exceptional=False, rules=None):
+        reply = {"scores": [{"id": row["id"], "score": score, "reason": reason, "exceptional": exceptional}]}
+        return R.parse_reply(reply, [row], rules or self.RULES).scores[row["id"]]
+
+    # 1. minimum experience of 3+ years
+    def test_a_minimum_of_three_or_more_years_caps_the_score_at_six(self):
+        for exp in ("3-5 yrs", "3+ yrs", "3 yrs", "5-10 yrs", "8+ yrs"):
+            s, why = self.score(self.row(exp=exp), 9)
+            self.assertEqual(s, 6, exp)
+            self.assertIn("capped at 6", why)
+            self.assertIn(exp, why)
+        for exp in ("2-4 yrs", "1-3 yrs", "0-2 yrs", "2+ yrs", "not stated", "fresher / entry level", ""):
+            self.assertEqual(self.score(self.row(exp=exp), 9)[0], 9, exp)
+
+    def test_an_exceptional_match_is_the_only_way_past_the_experience_cap_and_only_without_a_gap(self):
+        self.assertEqual(self.score(self.row(exp="3-5 yrs"), 9, "Django, DRF, Celery, Postgres and AWS match exactly.", True)[0], 9)
+        for reason in ("Django matches exactly; Angular is a gap.", "Exact stack, but Kubernetes is missing.",
+                       "Matches closely; payments domain not shown."):
+            self.assertEqual(self.score(self.row(exp="3-5 yrs"), 9, reason, True)[0], 6, reason)
+        self.assertEqual(self.score(self.row(exp="3-5 yrs"), 9, "Exact stack match.", False)[0], 6)     # not claimed
+        reply = {"scores": [{"id": 0, "score": 9, "reason": "Exact.", "exceptional": "true"}]}           # a string is not True
+        row = self.row(exp="3-5 yrs")
+        reply["scores"][0]["id"] = row["id"]
+        self.assertEqual(R.parse_reply(reply, [row], self.RULES).scores[row["id"]][0], 6)
+
+    def test_the_experience_threshold_is_configurable(self):
+        rules = R.Rules(min_years_from=4)
+        self.assertEqual(self.score(self.row(exp="3-5 yrs"), 8, rules=rules)[0], 8)
+        self.assertEqual(self.score(self.row(exp="4-6 yrs"), 8, rules=rules)[0], 6)
+
+    # 2. no company name
+    def test_no_company_name_caps_at_six(self):
+        for company in ("", "   ", None):
+            s, why = self.score(self.row(company=company or ""), 9)
+            self.assertEqual(s, 6)
+            self.assertIn("no company name", why)
+
+    # 3. recruiting platforms and aggregators
+    def test_listed_aggregators_are_capped_by_whole_word_match(self):
+        for company in ("Uplers", "UPLERS Pvt Ltd", "Ibrowsejobs Technologies", "Jobgether"):
+            s, why = self.score(self.row(company=company), 9)
+            self.assertEqual(s, 6, company)
+            self.assertIn("recruiting platform / aggregator", why)
+        self.assertEqual(self.score(self.row(company="Couplers Inc"), 9)[0], 9)                    # "uplers" inside a word
+        self.assertEqual(self.score(self.row(company="Acme Co"), 9)[0], 9)
+
+    def test_the_aggregator_list_is_editable_and_drop_mode_leaves_scoring_alone(self):
+        mine = R.Rules(aggregators=["Acme"])
+        self.assertEqual(self.score(self.row(company="Acme Co"), 9, rules=mine)[0], 6)
+        self.assertEqual(self.score(self.row(company="Uplers"), 9, rules=mine)[0], 9)
+        dropping = R.Rules(aggregator_action="drop")
+        self.assertEqual(self.score(self.row(company="Uplers"), 9, rules=dropping)[0], 9)         # dropped earlier, not capped
+
+    # 4. the score must reflect every caveat in its own reason
+    def test_a_serious_caveat_in_the_reason_cannot_sit_next_to_a_high_score(self):
+        for reason in ("Python matches, though fresher-level and below candidate's level.", "Django fits but a major gap in Kubernetes.",
+                       "Matches the stack; significant gap in cloud depth.", "Overqualified for this junior role.",
+                       "Python fits but there is a mismatch in domain.", "Mainly needs Java and Spring Boot.",
+                       "Mostly C++ with a little Python.", "A serious stretch on seniority.", "far above the candidate's level"):
+            s, why = self.score(self.row(), 8, reason)
+            self.assertEqual(s, 6, reason)
+            self.assertIn("its own reason says", why)
+
+    def test_small_gaps_do_not_trigger_it(self):
+        for reason in ("Django and Postgres match; React is a small gap.", "Python backend fits; FastAPI is a slight stretch.",
+                       "Close fit, a modest gap in AWS depth.", "Great fit; Kafka missing."):
+            self.assertEqual(self.score(self.row(), 8, reason)[0], 8, reason)
+
+    # 5. Java-centric roles
+    def test_java_centric_roles_score_lower(self):
+        for title in ("Java Developer", "Full Stack Java Developer", "Spring Boot Engineer", "Kotlin Backend Engineer"):
+            s, why = self.score(self.row(title=title), 8)
+            self.assertEqual(s, 5, title)
+            self.assertIn("Java-centric", why)
+        heavy = "Java and Spring Boot with Hibernate and Maven; JPA services. Some python scripting. "
+        self.assertEqual(self.score(self.row(title="Software Engineer", desc=heavy * 3), 8)[0], 5)
+        for title, desc in (("Python Java Developer", "Python Django. " * 8), ("Backend Engineer", "JavaScript and TypeScript React. " * 8),
+                            ("Software Engineer", "Python, Django, Flask and one line of Java."),
+                            ("Backend Engineer", "Java and Python services, Django REST. " * 6)):
+            self.assertEqual(self.score(self.row(title=title, desc=desc), 8)[0], 8, title)
+
+    def test_java_centric_helper(self):
+        self.assertTrue(R.java_centric("Java Developer", ""))
+        self.assertFalse(R.java_centric("Python and Java Developer", ""))
+        self.assertFalse(R.java_centric("Engineer", "JavaScript everywhere. " * 10))
+
+    # all together
+    def test_the_lowest_cap_wins_and_every_reason_is_named(self):
+        row = self.row(title="Java Developer", company="Uplers", exp="5-8 yrs")
+        s, why = self.score(row, 9, "Looks fine, though below candidate's level.")
+        self.assertEqual(s, 5)
+        for needle in ("model said 9", "capped at 5", "asks 5-8 yrs", "aggregator", "below candidate", "Java-centric"):
+            self.assertIn(needle, why)
+
+    def test_a_score_already_under_the_cap_is_left_alone(self):
+        s, why = self.score(self.row(exp="5+ yrs"), 4, "Weak fit.")
+        self.assertEqual((s, why), (4, "Weak fit."))
+
+    def test_without_rules_nothing_is_capped(self):
+        row = self.row(exp="8+ yrs", company="")
+        reply = {"scores": [{"id": row["id"], "score": 9, "reason": "Exact."}]}
+        self.assertEqual(R.parse_reply(reply, [row]).scores[row["id"]], (9, "Exact."))
+
+
+class RulesInTheFlow(Base):
+    def test_the_caps_apply_when_postings_are_scored_and_are_stored_with_the_note(self):
+        url = "https://www.linkedin.com/jobs/view/7100001"
+        self.tr.add_found({"canonical_url": url, "company": "Uplers", "role": "Backend Engineer", "route": "manual",
+                           "source": "linkedin", "source_url": url, "experience_asked": "3-5 yrs", "location": "Bengaluru",
+                           "description": "Python Django. " * 20})
+        jid = self.tr.job(url)["id"]
+        R.score_unscored(self.tr, lambda p: {"scores": [{"id": jid, "score": 9, "reason": "Exact match."}]}, RESUME, PROFILE,
+                         log=lambda *a: None, rules=R.Rules())
+        r = self.tr.by_ids([jid])[0]
+        self.assertEqual(r["relevance"], 6)
+        self.assertIn("model said 9, capped at 6", r["relevance_reason"])
+
+    def test_the_prompt_states_the_rules_and_asks_for_the_exceptional_flag(self):
+        self.add(1)
+        prompt = R.build_prompt(self.rows(), "SUMMARY")
+        for needle in ("MINIMUM experience is 3 or more years scores at most 6", '"exceptional"', "no company name scores at most 6",
+                       "recruiting platform, staffing firm or job aggregator", "must reflect every caveat", "Java-centric",
+                       "at most 5"):
+            self.assertIn(needle, prompt)
+
+    def test_rules_come_from_the_config_with_the_defaults(self):
+        r = R.rules_from_config({})
+        self.assertEqual((r.cap, r.min_years_from, r.aggregator_action, r.java_cap), (6, 3, "cap", 5))
+        self.assertEqual(r.aggregators, ["Uplers", "Ibrowsejobs", "Jobgether"])
+        mine = R.rules_from_config({"selection": {"score_cap": 5, "cap_min_years_from": 4, "java_cap": 4},
+                                    "discovery": {"aggregators": ["X"], "aggregator_action": "drop"}})
+        self.assertEqual((mine.cap, mine.min_years_from, mine.java_cap, mine.aggregators, mine.aggregator_action),
+                         (5, 4, 4, ["X"], "drop"))
+        with self.assertRaises(ValueError):
+            R.rules_from_config({"discovery": {"aggregator_action": "maybe"}})
+
+    def test_the_example_config_lists_the_aggregators(self):
+        from jobbot import config as cfgmod
+        r = R.rules_from_config(cfgmod.load_config(ROOT / "config.example.yaml"))
+        for name in ("Uplers", "Ibrowsejobs", "Jobgether"):
+            self.assertIn(name, r.aggregators)
+
+    def test_drop_mode_removes_aggregators_before_scoring_and_cap_mode_keeps_them(self):
+        from jobbot import discovery as D
+        base = {"search_terms": ["x"], "locations": ["Bengaluru"], "sites": ["indeed"], "aggregators": ["Uplers"]}
+        for action, kept in (("drop", 0), ("cap", 1)):
+            self.tr.delete_found()
+            self.add(1)
+            self.tr.db.execute("UPDATE jobs SET company='Uplers'")
+            self.tr.db.commit()
+            gone = D.recheck_found(self.tr, D.load_settings({"discovery": {**base, "aggregator_action": action}}), log=lambda *a: None)
+            self.assertEqual(len(self.tr.found()), kept, action)
+            if action == "drop":
+                self.assertEqual(gone[0]["kind"], "aggregator")
+
+    def test_rescoring_forgets_found_scores_only_and_shows_the_top(self):
+        a, b = self.add(1), self.add(2)
+        self.tr.set_relevance(a, 9, "old")
+        self.tr.set_relevance(b, 5, "old")
+        self.tr.decide([b], approve=True)
+        self.assertEqual(self.tr.clear_relevance(), 1)                                    # b is no longer Found
+        self.assertEqual(self.tr.by_ids([b])[0]["relevance"], 5)
+        self.tr.set_relevance(a, 8, "new reason")
+        text = R.format_top(self.tr.found(), 10)
+        self.assertIn("| 1 | " + str(a) + " | 8 |", text)
+        self.assertIn("new reason", text)
+        self.assertIn("TOP 1 BY RELEVANCE", text)
+
+
 if __name__ == "__main__":
     unittest.main()

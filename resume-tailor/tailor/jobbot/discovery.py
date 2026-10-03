@@ -105,6 +105,10 @@ class Settings:
     title_include_words: list[str] = field(default_factory=lambda: list(DEFAULT_TITLE_INCLUDE_WORDS))
     title_exclude_words: list[str] = field(default_factory=lambda: list(DEFAULT_TITLE_EXCLUDE_WORDS))
     embedded_terms: list[str] = field(default_factory=lambda: list(DEFAULT_EMBEDDED_TERMS))
+    # Recruiting platforms / staffing firms / aggregators (not the employer). "cap": scored but at most 6 (never auto-approved);
+    # "drop": removed before scoring. Matched against the company name, ignoring case and punctuation.
+    aggregators: list[str] = field(default_factory=lambda: ["Uplers", "Ibrowsejobs", "Jobgether"])
+    aggregator_action: str = "cap"
     embedded_min_terms: int = DEFAULT_EMBEDDED_MIN_TERMS
     frontend_terms: list[str] = field(default_factory=lambda: list(DEFAULT_FRONTEND_TERMS))
     backend_terms: list[str] = field(default_factory=lambda: list(DEFAULT_BACKEND_TERMS))
@@ -118,6 +122,19 @@ def _words(d: dict, name: str, default: "list[str]") -> "list[str]":
     if not isinstance(v, list) or not all(isinstance(x, str) for x in v):
         raise DiscoveryError(f"discovery.{name} must be a list of words")
     return [x.strip() for x in v if x.strip()]
+
+
+def _choice(d: dict, name: str, default: str, allowed: tuple) -> str:
+    v = str(d.get(name, default))
+    if v not in allowed:
+        raise DiscoveryError(f"discovery.{name} must be one of {list(allowed)}")
+    return v
+
+
+def aggregator_of(company: str, s: Settings) -> "str | None":
+    """Which listed recruiting platform / aggregator this company is, or None (whole-word match)."""
+    from jobbot.relevance import is_aggregator
+    return is_aggregator(company, s.aggregators)
 
 
 def load_settings(cfg: dict) -> Settings:
@@ -173,6 +190,8 @@ def load_settings(cfg: dict) -> Settings:
         title_exclude_words=_words(d, "title_exclude_words", DEFAULT_TITLE_EXCLUDE_WORDS),
         embedded_terms=_words(d, "embedded_terms", DEFAULT_EMBEDDED_TERMS),
         embedded_min_terms=num("embedded_min_terms", DEFAULT_EMBEDDED_MIN_TERMS, 1, 20),
+        aggregators=_words(d, "aggregators", ["Uplers", "Ibrowsejobs", "Jobgether"]),
+        aggregator_action=_choice(d, "aggregator_action", "cap", ("cap", "drop")),
         frontend_terms=_words(d, "frontend_terms", DEFAULT_FRONTEND_TERMS),
         backend_terms=_words(d, "backend_terms", DEFAULT_BACKEND_TERMS),
         delay_between_searches_s=(float(delay[0]), float(delay[1])),
@@ -355,6 +374,8 @@ def recheck_found(tracker, s: Settings, log=print) -> list[dict]:
                 ok, w = description_ok(r["role"] or "", r["description"] or "", s)
                 if not ok:
                     why, kind = w, "description"
+                elif s.aggregator_action == "drop" and (agg := aggregator_of(r["company"] or "", s)):
+                    why, kind = f"{agg} is a recruiting platform / aggregator (discovery.aggregators)", "aggregator"
         if kind:
             gone.append({"id": r["id"], "company": r["company"], "title": r["role"], "kind": kind, "why": why})
     tracker.delete_found_ids([g["id"] for g in gone])
@@ -622,6 +643,9 @@ def discover(s: Settings, tracker: "T.Tracker | None", *, scrape_fn: "Callable |
         ok, why = description_ok(job.title, job.description, s)
         if not ok:
             rep.drop("description", job, why)
+            continue
+        if s.aggregator_action == "drop" and (agg := aggregator_of(job.company, s)):
+            rep.drop("aggregator", job, f"{agg} is a recruiting platform / aggregator (discovery.aggregators)")
             continue
         kept.append(job)
 

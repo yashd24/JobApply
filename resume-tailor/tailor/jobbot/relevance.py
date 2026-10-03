@@ -16,6 +16,7 @@ from jobbot import answers as A
 from jobbot import profile as P
 
 BATCH_SIZE = 10
+DEFAULT_AGGREGATORS = ["Uplers", "Ibrowsejobs", "Jobgether"]
 DESCRIPTION_CHARS = 1800
 NO_TEXT_CAP = 6               # a posting with no description can be judged on its title only: never above this
 REASON_CHARS = 200
@@ -42,8 +43,10 @@ def build_prompt(rows: list, summary: str) -> str:
                     f"Experience asked: {r['experience_asked'] or 'not stated'}\nDescription:\n<<<\n{text}\n>>>")
     return f"""You are scoring job postings for ONE candidate, honestly. Do not use any tools. Reply with ONE JSON object only,
 no prose, no code fences:
-{{"scores": [{{"id": <job id>, "score": <whole number 1-10>, "reason": "<one line, under 25 words>"}}, ...]}}
-with exactly one entry per job below.
+{{"scores": [{{"id": <job id>, "score": <whole number 1-10>, "reason": "<one line, under 25 words>",
+"exceptional": <true or false>}}, ...]}}
+with exactly one entry per job below. "exceptional" is true ONLY when the posting's core stack is exactly the resume's with
+no gap worth mentioning (it matters for rule 1).
 
 {summary}
 
@@ -55,6 +58,15 @@ HOW TO SCORE (be honest; a high score must be earned from the resume above, not 
   data engineering, ML research, security, SAP/CRM, networking), or is not really a software engineering role, or asks
   clearly more than the candidate has. Roles mainly needing skills the candidate does not have score LOW.
 - A posting with no description can only be judged on its title: never above {NO_TEXT_CAP}.
+- RULES THAT CAP THE SCORE (code enforces them too, so score by them honestly):
+  1. A posting whose MINIMUM experience is 3 or more years scores at most 6, unless "exceptional" is true.
+  2. A posting with no company name scores at most 6.
+  3. A posting from a recruiting platform, staffing firm or job aggregator (not the employer itself) scores at most 6.
+  4. The score must reflect every caveat in your own reason. If the reason says "below level", "overqualified", "major gap",
+     "mismatch" or similar, the score is 6 or lower. A small or modest gap costs a point; do not write a serious caveat and
+     still give 8.
+  5. Java-centric roles (Java/Spring/Kotlin/Scala is the main stack) score at most 5: the candidate's experience is
+     Python/Django, with Java only listed.
 - Base every score on what the posting asks versus what the resume shows. The reason names the deciding fact.
 
 JOBS:
@@ -63,14 +75,98 @@ JOBS:
 """
 
 
+# ─── deterministic caps (applied in code to whatever Claude says) ────────────────────────────────────────
+
+@dataclass
+class Rules:
+    """The scoring rules code enforces. `cap` is the ceiling for rules 1-4; `java_cap` for Java-centric roles."""
+    cap: int = 6
+    min_years_from: float = 3                    # a posting whose MINIMUM experience is this or more ...
+    aggregators: list = field(default_factory=lambda: list(DEFAULT_AGGREGATORS))
+    aggregator_action: str = "cap"               # "cap" here; "drop" is applied before scoring (discovery.recheck_found)
+    java_cap: int = 5
+
+
+def rules_from_config(cfg: dict) -> Rules:
+    sel, disc = (cfg or {}).get("selection") or {}, (cfg or {}).get("discovery") or {}
+    action = str(disc.get("aggregator_action", "cap"))
+    if action not in ("cap", "drop"):
+        raise ValueError("discovery.aggregator_action must be 'cap' or 'drop'")
+    return Rules(cap=int(sel.get("score_cap", 6)), min_years_from=float(sel.get("cap_min_years_from", 3)),
+                 aggregators=[str(x) for x in disc.get("aggregators", DEFAULT_AGGREGATORS)], aggregator_action=action,
+                 java_cap=int(sel.get("java_cap", 5)))
+
+
+_GAP = re.compile(r"\b(gap|gaps|lack|lacks|lacking|missing|not shown|unshown|stretch|absent|no exposure|without)\b", re.I)
+# Words that mean "this is a real problem". A score of 7+ with one of these in its own reason contradicts itself.
+_STRONG = re.compile(
+    r"\b(major|significant|serious|large|big|substantial|critical|key)\s+(gap|gaps|mismatch|stretch)\b|"
+    r"\bbelow\s+(the\s+)?(candidate'?s\s+)?(level|experience|seniority)\b|\bover-?qualified\b|"
+    r"\b(far|well|much)\s+(above|below)\b|\bmismatch\b|\bnot really a software\b|"
+    r"\b(mainly|mostly|primarily)\s+(needs|requires|centers|centres|focused|about|java|c\+\+|\.net|go\b|golang)", re.I)
+_JAVA_TITLE = re.compile(r"\bjava\b|\bspring\s*boot\b|\bj2ee\b|\bkotlin\b|\bscala\b", re.I)
+_PY_TITLE = re.compile(r"python|django|flask|fastapi", re.I)
+_JAVA_BODY = re.compile(r"\bjava\b|spring(?:\s*boot)?|hibernate|j2ee|\bjsp\b|\bjpa\b|\bmaven\b|\bkotlin\b", re.I)
+_PY_BODY = re.compile(r"\bpython\b|django|flask|fastapi|celery", re.I)
+
+
+def min_years_of(row) -> "float | None":
+    """The MINIMUM experience the posting asks for, from the label the selection rules stored ("3-5 yrs", "3+ yrs")."""
+    m = re.match(r"\s*(\d+(?:\.\d+)?)", str(row["experience_asked"] or ""))
+    return float(m.group(1)) if m else None
+
+
+def java_centric(title: str, description: str) -> bool:
+    """Java (Spring, Kotlin, Scala) is the main stack: in the title without Python/Django, or the text is mostly Java."""
+    if _JAVA_TITLE.search(title or "") and not _PY_TITLE.search(title or ""):
+        return True
+    j, p = len(_JAVA_BODY.findall(description or "")), len(_PY_BODY.findall(description or ""))
+    return j >= 4 and j > 2 * p
+
+
+def is_aggregator(company: str, names: list) -> "str | None":
+    """Which listed platform this company is: its name appears as WHOLE WORDS ("Ibrowsejobs Technologies" matches
+    "Ibrowsejobs"; "Couplers Inc" does not match "Uplers"), ignoring case and punctuation."""
+    words = " " + re.sub(r"[^a-z0-9]+", " ", (company or "").lower()).strip() + " "
+    for n in names:
+        key = re.sub(r"[^a-z0-9]+", " ", str(n).lower()).strip()
+        if key and f" {key} " in words:
+            return str(n)
+    return None
+
+
+def apply_rules(row, score: int, reason: str, exceptional: bool, rules: "Rules") -> "tuple[int, str]":
+    """Cap Claude's score by the five rules. Returns the final score and the reason with a note of what was changed."""
+    caps: list[tuple[int, str]] = []
+    years = min_years_of(row)
+    if years is not None and years >= rules.min_years_from:
+        if not (exceptional and not _GAP.search(reason)):          # "exceptional" only counts if the reason names no gap
+            caps.append((rules.cap, f"asks {row['experience_asked']} (minimum {years:g}+ years)"))
+    if not (row["company"] or "").strip():
+        caps.append((rules.cap, "no company name"))
+    if rules.aggregator_action == "cap" and (hit := is_aggregator(row["company"], rules.aggregators)):
+        caps.append((rules.cap, f"{hit} is a recruiting platform / aggregator"))
+    if (m := _STRONG.search(reason)):
+        caps.append((rules.cap, f"its own reason says '{m.group(0)}'"))
+    if java_centric(row["role"] or "", row["description"] or ""):
+        caps.append((rules.java_cap, "Java-centric role (your experience is Python/Django)"))
+    if not caps:
+        return score, reason
+    ceiling = min(c for c, _ in caps)
+    if score <= ceiling:
+        return score, reason
+    why = "; ".join(w for c, w in caps if c <= score)
+    return ceiling, f"{reason} [model said {score}, capped at {ceiling}: {why}]"[:REASON_CHARS + 160]
+
+
 @dataclass
 class Parsed:
     scores: dict = field(default_factory=dict)         # id -> (score, reason)
     rejected: list = field(default_factory=list)       # (id or None, why)
 
 
-def parse_reply(reply: dict, rows: list) -> Parsed:
-    """Validate Claude's answer against the batch it was asked about."""
+def parse_reply(reply: dict, rows: list, rules: "Rules | None" = None) -> Parsed:
+    """Validate Claude's answer against the batch it was asked about, then apply the caps in `rules` (if given)."""
     out = Parsed()
     ids = {r["id"]: r for r in rows}
     entries = reply.get("scores") if isinstance(reply, dict) else None
@@ -98,6 +194,8 @@ def parse_reply(reply: dict, rows: list) -> Parsed:
             continue
         if not (ids[jid]["description"] or "").strip() and score > NO_TEXT_CAP:
             score, reason = NO_TEXT_CAP, f"{reason} (capped at {NO_TEXT_CAP}: no description to judge from)"[:REASON_CHARS + 40]
+        if rules is not None:
+            score, reason = apply_rules(ids[jid], score, reason, e.get("exceptional") is True, rules)
         out.scores[jid] = (score, reason)
     return out
 
@@ -111,7 +209,7 @@ class ScoreReport:
 
 
 def score_unscored(tracker, llm, resume: dict, profile: dict, *, batch_size: int = BATCH_SIZE, log=print,
-                   today: "date | None" = None) -> ScoreReport:
+                   today: "date | None" = None, rules: "Rules | None" = None) -> ScoreReport:
     """Score every Found posting that has no score, 10 per call. Progress is saved after each batch, so a usage limit
     (UsageLimitError propagates) loses nothing: the next run continues with what is still unscored."""
     rep = ScoreReport()
@@ -122,7 +220,7 @@ def score_unscored(tracker, llm, resume: dict, profile: dict, *, batch_size: int
         log(f"  scoring {i + 1}-{i + len(batch)} of {len(rows)}...")
         rep.calls += 1
         try:
-            parsed = parse_reply(llm(build_prompt(batch, summary)), batch)
+            parsed = parse_reply(llm(build_prompt(batch, summary)), batch, rules)
         except Exception as e:                 # a bad reply loses one batch, not the run; a usage limit stops everything
             if type(e).__name__ == "UsageLimitError":
                 raise
@@ -135,3 +233,15 @@ def score_unscored(tracker, llm, resume: dict, profile: dict, *, batch_size: int
         rep.left_unscored += [r["id"] for r in batch if r["id"] not in parsed.scores]
         rep.problems += [f"batch {rep.calls}: job {jid if jid is not None else '?'}: {why}" for jid, why in parsed.rejected]
     return rep
+
+
+def format_top(rows, n: int = 10) -> str:
+    """The best-scored postings as a table: score, title, company, experience asked, reason (with any cap noted)."""
+    top = sorted((r for r in rows if r["relevance"] is not None), key=lambda r: (-r["relevance"], r["id"]))[:n]
+    esc = lambda x: str(x or "").replace("|", "/").replace("\n", " ")        # noqa: E731
+    out = [f"TOP {len(top)} BY RELEVANCE", "| # | ID | Score | Title | Company | Experience asked | Reason |",
+           "|--:|--:|--:|---|---|---|---|"]
+    for i, r in enumerate(top, 1):
+        out.append(f"| {i} | {r['id']} | {r['relevance']} | {esc(r['role'])} | {esc(r['company']) or '(blank)'} | "
+                   f"{esc(r['experience_asked'])} | {esc(r['relevance_reason'])} |")
+    return "\n".join(out)

@@ -53,6 +53,27 @@ def show_shortlist(t: "T.Tracker", cfg: dict) -> str:
     return text + f"\n(as data: {write_shortlist_json(t, cfg)}; the Google Sheet is the main view)"
 
 
+def rescore(cfg: dict, top: int = 10) -> int:
+    """Forget the scores of Found postings and score them again under the CURRENT scoring rules, then show the top."""
+    from jobbot import profile as P
+    from jobbot import relevance
+    profile = P.load_profile(ROOT / "profile.yaml")
+    resume = tailor.load_resume_data()
+    with T.Tracker(_tracker_file()) as t:
+        print(f"Cleared {t.clear_relevance()} score(s); scoring {len(t.unscored())} Found posting(s) again "
+              "(one Claude call per 10)...")
+        try:
+            rep = relevance.score_unscored(t, tailor.call_claude, resume, profile, rules=relevance.rules_from_config(cfg))
+            print(f"scored {rep.scored} in {rep.calls} call(s); {len(rep.left_unscored)} left unscored")
+            for p in rep.problems[:5]:
+                print("  problem:", p)
+        except tailor.UsageLimitError as e:
+            print(f"Claude's usage limit was reached ({str(e)[:100]}); what was scored is saved. Run --rescore again later "
+                  "to finish the rest.")
+        print("\n" + relevance.format_top(t.found(), top))
+    return 0
+
+
 def run_discovery(args, cfg: dict) -> int:
     settings = D.load_settings(cfg)
     if args.term:
@@ -93,6 +114,9 @@ def main() -> int:
     ap.add_argument("--term", action="append", help="use only this search term (repeatable)")
     ap.add_argument("--results", type=int, help="results per search (overrides config)")
     ap.add_argument("--why", action="store_true", help="also print every dropped posting with its reason")
+    ap.add_argument("--rescore", action="store_true",
+                    help="forget the scores of Found postings and score them again under the current scoring rules "
+                         "(spends Claude usage: one call per 10 postings), then show the top 10")
     ap.add_argument("--fill-descriptions", action="store_true",
                     help="fetch the missing descriptions of Found postings (HTTP only, no Claude), then exit "
                          "(with --dry-run: only count what could be fetched)")
@@ -107,6 +131,8 @@ def main() -> int:
     args = ap.parse_args()
     try:
         cfg = cfgmod.load_config(CONFIG_FILE)
+        if args.rescore:
+            return rescore(cfg)
         if args.fill_descriptions:
             import batch
             with T.Tracker(_tracker_file()) as t:

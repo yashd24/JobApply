@@ -238,6 +238,13 @@ class Tracker:
         self.db.execute("UPDATE jobs SET relevance=?, relevance_reason=? WHERE id=?", (int(score), reason, job_id))
         self.db.commit()
 
+    def clear_relevance(self) -> int:
+        """Forget every score on postings that are still Found, so the next scoring pass redoes them (new scoring rules)."""
+        n = self.db.execute("UPDATE jobs SET relevance=NULL, relevance_reason=NULL WHERE status='found' "
+                            "AND relevance IS NOT NULL").rowcount
+        self.db.commit()
+        return n
+
     def top_found(self, threshold: int, limit: int) -> list[sqlite3.Row]:
         """Found postings scored at or above the threshold: the most relevant first, then newest, up to `limit`."""
         return self.db.execute(
