@@ -735,6 +735,8 @@ def apply_llm(fields: list[Field], ctx: Context) -> list[Answer]:
     try:
         reply = ctx.llm(build_llm_prompt(fields, ctx)).get("answers", {})
     except Exception as e:                      # Claude unavailable / bad JSON: flag everything, never guess
+        if type(e).__name__ == "UsageLimitError":          # the limit is not a bad answer: stop and say so
+            raise
         return [_flag(f, "llm", f"LLM call failed: {type(e).__name__}", "llm") for f in fields]
     allowed = visible_text(ctx.resume) + " " + json.dumps(llm_profile_facts(ctx.profile))
     out: list[Answer] = []

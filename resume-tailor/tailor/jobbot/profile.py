@@ -408,6 +408,20 @@ def notice_period_answer(profile: dict, today: date | None = None, *,
     return covering[0][1] if covering else None
 
 
+def employment_end(profile: dict, today: date | None = None) -> date | None:
+    """The last working day, from the DAY AFTER it on (so the job has ended); None before that, when not serving
+    notice, or when the date is missing / TODO. Everything date-driven about the ended job reads this."""
+    today = today or date.today()
+    e = (profile or {}).get("employment") or {}
+    if e.get("serving_notice") is not True:
+        return None
+    try:
+        lwd = _day(e.get("last_working_day"))
+    except (ValueError, TypeError):
+        return None
+    return lwd if today > lwd else None
+
+
 def human_date(d: date) -> str:
     """13 Oct 2026 (no leading zero on the day). Used for dates written in free text."""
     return f"{d.day} {d:%b} {d.year}"

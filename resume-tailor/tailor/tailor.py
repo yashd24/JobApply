@@ -48,8 +48,14 @@ class TailorError(RuntimeError):
     """A recoverable failure in tailoring (missing tool, Claude error, LaTeX error...)."""
 
 
-def load_resume_data() -> dict:
-    """resume_data.yaml plus the private email/phone from contact.yaml."""
+class UsageLimitError(TailorError):
+    """Claude Code says the Pro usage limit is reached. Not a failure of this tool: wait, then resume."""
+    job_dir: "Path | None" = None
+
+
+def load_resume_data(today: "date | None" = None) -> dict:
+    """resume_data.yaml plus the private email/phone from contact.yaml. From the day after the last working day in
+    profile.yaml, the current job's "Present" becomes that month ("Aug 2025 - Oct 2026")."""
     data = yaml.safe_load(DATA_FILE.read_text(encoding="utf-8"))
     if not CONTACT_FILE.exists():
         raise TailorError(f"{CONTACT_FILE.name} not found. Copy contact.example.yaml to contact.yaml and "
@@ -60,7 +66,33 @@ def load_resume_data() -> dict:
         if not value or value.upper() == "TODO":
             raise TailorError(f"{CONTACT_FILE.name}: '{key}' is missing or still TODO.")
         data[key] = value
+    ended = employment_end_from_profile(today)
+    if ended:
+        close_current_job(data, *ended)
     return data
+
+
+PROFILE_FILE = ROOT / "profile.yaml"
+
+
+def employment_end_from_profile(today: "date | None" = None) -> "tuple[str, date] | None":
+    """(company, last working day) once that day has passed, read from profile.yaml (never hardcoded); None if there
+    is no profile, it is unreadable, or the job has not ended yet."""
+    from jobbot import profile as P
+    try:
+        profile = yaml.safe_load(PROFILE_FILE.read_text(encoding="utf-8")) if PROFILE_FILE.exists() else None
+    except (OSError, yaml.YAMLError):
+        return None
+    end = P.employment_end(profile, today)
+    company = ((profile or {}).get("employment") or {}).get("current_company")
+    return (company, end) if end and company else None
+
+
+def close_current_job(data: dict, company: str, end: "date") -> None:
+    """Replace a trailing "Present" in the dates of `company`'s entries with the end month, e.g. Oct 2026."""
+    for entry in data.get("experience", []):
+        if entry.get("company") == company and re.search(r"present\s*$", str(entry.get("dates", "")), re.I):
+            entry["dates"] = re.sub(r"present\s*$", f"{end:%b %Y}", str(entry["dates"]), flags=re.I)
 
 
 # ─── Job description input ───────────────────────────────────────────────────
@@ -245,6 +277,20 @@ OUTPUT JSON SCHEMA
 }}"""
 
 
+USAGE_LIMIT = re.compile(r"usage limit|limit reached|rate.?limit|too many requests|quota|out of (extra )?usage|"
+                         r"limit will reset|resets? (at|in|on)", re.I)
+
+
+def usage_limit_message(text: str) -> "str | None":
+    """A plain-English note if Claude Code's output says the usage limit was hit, else None."""
+    m = USAGE_LIMIT.search(text or "")
+    if not m:
+        return None
+    seen = re.sub(r"\s+", " ", text[max(0, m.start() - 60):m.end() + 100]).strip()
+    return ("Claude Code's usage limit has been reached (it said: \"" + seen + "\"). This is not an error in the tool: "
+            "wait for your Pro limit to reset, then continue where it stopped.")
+
+
 def call_claude(prompt: str) -> dict:
     exe = shutil.which("claude") or shutil.which("claude.cmd")  # Windows npm installs use claude.cmd
     if not exe:
@@ -257,10 +303,14 @@ def call_claude(prompt: str) -> dict:
     try:
         envelope = json.loads(proc.stdout)
     except json.JSONDecodeError:
+        if note := usage_limit_message(proc.stdout + "\n" + proc.stderr):
+            raise UsageLimitError(note)
         raise TailorError(f"Claude Code returned unexpected output (exit {proc.returncode}).\n"
                           f"{proc.stdout[-1500:]}\n{proc.stderr[-1500:]}\n"
                           "If this mentions a usage limit, wait for your Pro limit to reset and re-run.")
     if envelope.get("is_error"):
+        if note := usage_limit_message(str(envelope.get("result", "")) + "\n" + proc.stderr):
+            raise UsageLimitError(note)
         raise TailorError(f"Claude Code reported an error: {envelope.get('result')}")
     return parse_json_reply(envelope.get("result", ""))
 
@@ -274,6 +324,17 @@ def parse_json_reply(text: str) -> dict:
 
 
 # ─── Compile & fit to one page ───────────────────────────────────────────────
+
+def latex_error_summary(log: str) -> str:
+    """The first LaTeX error and its source line, e.g. '! Undefined control sequence. (line 45: \\foo bar)'."""
+    lines = log.splitlines()
+    for i, line in enumerate(lines):
+        if line.startswith("!"):
+            where = next((l for l in lines[i + 1:i + 8] if re.match(r"l\.\d+", l)), "")
+            m = re.match(r"l\.(\d+)\s*(.*)", where)
+            return f"{line.strip()}" + (f" (line {m.group(1)}: {m.group(2).strip()[:80]})" if m else "")
+    return log.strip()[-300:] or "no error text was written"
+
 
 def compile_pdf(tex: str, build_dir: Path) -> tuple[Path, int]:
     build_dir.mkdir(parents=True, exist_ok=True)
@@ -296,8 +357,11 @@ def compile_pdf(tex: str, build_dir: Path) -> tuple[Path, int]:
     pdf = build_dir / "resume.pdf"
     if proc.returncode != 0 or not pdf.exists():
         log = build_dir / "resume.log"
-        tail = log.read_text(encoding="utf-8", errors="replace")[-2500:] if log.exists() else proc.stdout[-2500:]
-        raise TailorError(f"LaTeX compile failed:\n{tail}")
+        text = log.read_text(encoding="utf-8", errors="replace") if log.exists() else proc.stdout
+        raise TailorError(f"LaTeX compile failed: {latex_error_summary(text)}\n"
+                          f"Full log: {log if log.exists() else '(none written)'}\n"
+                          "A bullet edit with unbalanced braces or a stray special character (& % $ # _) is the usual "
+                          "cause: the guard normally blocks those, so please report the log.")
     return pdf, len(PdfReader(str(pdf)).pages)
 
 
@@ -495,7 +559,8 @@ def slug(s: str) -> str:
 
 def tailor_job(company: str, role: str, jd_text: str, jd_url: str = "", *,
                plan_file: str | None = None, prompt_only: bool = False,
-               output_dir: Path | None = None, allow_selection: bool = False) -> dict:
+               output_dir: Path | None = None, allow_selection: bool = False,
+               job_dir: "Path | None" = None) -> dict:
     """JD -> tailored one-page PDF + report. Returns the result dict (also saved as result.json).
     Default is LOCKED mode: exactly the base resume's entries and bullets; only bullet order,
     skill order and guarded keyword edits change. allow_selection=True restores the old
@@ -506,9 +571,11 @@ def tailor_job(company: str, role: str, jd_text: str, jd_url: str = "", *,
     if len(jd_text.strip()) < 200:
         raise TailorError("Job description is too short — paste the full text.")
 
-    job_dir = output_dir / f"{date.today():%Y-%m-%d}_{slug(company)}_{slug(role)}"
+    job_dir = Path(job_dir) if job_dir else output_dir / f"{date.today():%Y-%m-%d}_{slug(company)}_{slug(role)}"
     job_dir.mkdir(parents=True, exist_ok=True)
     (job_dir / "jd.txt").write_text(jd_text, encoding="utf-8")
+    (job_dir / "job_info.json").write_text(json.dumps({"company": company, "role": role, "url": jd_url or ""},
+                                                       indent=2, ensure_ascii=False), encoding="utf-8")
 
     prompt = build_prompt(data, jd_text, company, role, allow_selection=allow_selection)
     if prompt_only:
@@ -519,7 +586,11 @@ def tailor_job(company: str, role: str, jd_text: str, jd_url: str = "", *,
         raw = json.loads(Path(plan_file).read_text(encoding="utf-8"))
     else:
         print("Asking Claude Code to tailor (this uses your Pro usage)...")
-        raw = call_claude(prompt)
+        try:
+            raw = call_claude(prompt)
+        except UsageLimitError as e:
+            e.job_dir = job_dir                      # the folder already holds the JD: resume from it
+            raise
     (job_dir / "claude_raw.json").write_text(json.dumps(raw, indent=2, ensure_ascii=False), encoding="utf-8")
 
     if allow_selection:
@@ -541,7 +612,13 @@ def tailor_job(company: str, role: str, jd_text: str, jd_url: str = "", *,
     (job_dir / "resume.tex").write_text(tex, encoding="utf-8")
     (job_dir / "plan.json").write_text(json.dumps(plan, indent=2, ensure_ascii=False), encoding="utf-8")
     keywords = verified_keywords(raw, job_dir / PDF_NAME)
-    write_report(job_dir / "report.md", company, role, raw, plan, data, warnings, trimmed, keywords,
+    tense_warnings = []
+    if (ended := employment_end_from_profile()):
+        from jobbot import tense
+        tense_warnings = tense.resume_problems(data, ended[0], plan.get("edits"))
+        for w in tense_warnings:
+            print(f"  tense: {w}")
+    write_report(job_dir / "report.md", company, role, raw, plan, data, warnings + [f"present tense after the last working day: {w}" for w in tense_warnings], trimmed, keywords,
                  locked=not allow_selection)
 
     # Machine-readable summary for the tracker / applier
@@ -553,7 +630,7 @@ def tailor_job(company: str, role: str, jd_text: str, jd_url: str = "", *,
         "mode": "selection" if allow_selection else "locked",
         "edits_applied": len(plan["edits"]), "edits_rejected":
             sum(1 for e in plan["edit_log"] if e["status"] == "rejected"),
-        "trimmed": trimmed,
+        "trimmed": trimmed, "tense_warnings": tense_warnings,
     }
     (job_dir / "result.json").write_text(json.dumps(result, indent=2, ensure_ascii=False), encoding="utf-8")
     return result
@@ -589,6 +666,10 @@ def main() -> None:
         result = tailor_job(args.company, args.role, read_jd(args), args.jd_url or "",
                             plan_file=args.plan, prompt_only=args.prompt_only,
                             allow_selection=args.allow_selection)
+    except UsageLimitError as e:
+        where = (f"\nThe job description is saved in {e.job_dir}; run the same command again after the reset."
+                 if e.job_dir else "")
+        sys.exit(f"{e}{where}")
     except TailorError as e:
         sys.exit(str(e))
 

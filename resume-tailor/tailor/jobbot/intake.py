@@ -356,7 +356,8 @@ def fetch_job(url: str, *, http: Http | None = None, tracker: Tracker | None = N
             raise UnsupportedPlatform(
                 f"{url}: not a Greenhouse or Lever posting (v1 supports boards.greenhouse.io, "
                 "job-boards.greenhouse.io, company pages with gh_jid or an embedded Greenhouse form, "
-                "and jobs.lever.co).")
+                "and jobs.lever.co). LinkedIn, Naukri and Indeed are not supported yet; apply there by hand, and for "
+                "a company career page that uses another system (Workday and so on) do the same.")
 
     if tracker is not None and tracker.is_submitted(target.canonical_url):
         raise AlreadySubmitted(target.canonical_url)

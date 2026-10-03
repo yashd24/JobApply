@@ -75,21 +75,20 @@ def decide_mode(requested: str, canonical_url: str, allow_submit: "str | None") 
     return requested, "real submission approved for this job"
 
 
+def ended_job(profile: dict, today=None) -> "tuple[str, object] | None":
+    """(company, last working day) from the DAY AFTER the last working day in profile.yaml, else None. Resume dates,
+    cover-letter tense and the tense checks all follow this one rule."""
+    end = P.employment_end(profile, today)
+    return (profile["employment"]["current_company"], end) if end else None
+
+
 def _tracker_file() -> Path:
     return tailor.OUTPUT_DIR / "tracker.sqlite3"
 
 
 def _sheet_client():
-    """The Google Sheet from config.yaml, or None when it is not configured or not yet authorised. A run never
-    opens a Google sign-in by itself: authorise once with `python apply.py --sync-sheet`."""
-    cfg = cfgmod.load_config(CONFIG_FILE)
-    if not sheets.configured(cfg):
-        return None
-    client = sheets.client_from_config(cfg, ROOT)
-    if not client.token_file.exists():
-        print("    (Google Sheet not synced: run `python apply.py --sync-sheet` once to authorise it)")
-        return None
-    return client
+    """The Google Sheet from config.yaml, or None when it is not configured or not yet authorised."""
+    return sheets.authorised_client(cfgmod.load_config(CONFIG_FILE), ROOT)
 
 
 def _track(job_dir: Path) -> None:
@@ -238,6 +237,18 @@ def _prepare(job, job_dir: Path, resume_pdf: Path, resume: dict, profile: dict, 
     return out
 
 
+def url_of_folder(folder: Path) -> "str | None":
+    """The posting URL a job folder was made for (job_info.json from tailoring, else the run's own result file)."""
+    for name, key in (("job_info.json", "url"), ("apply_result.json", "url")):
+        try:
+            value = json.loads((Path(folder) / name).read_text(encoding="utf-8")).get(key)
+        except (OSError, ValueError):
+            continue
+        if value:
+            return value
+    return None
+
+
 def mark_submitted(job_dir: Path) -> dict:
     """Record a prepared application as submitted by hand (for runs that had no terminal to confirm in)."""
     path = Path(job_dir) / "apply_result.json"
@@ -256,10 +267,18 @@ def mark_submitted(job_dir: Path) -> dict:
 
 def run(url: str, *, mode: "str | None" = None, allow_submit: "str | None" = None, dry_run: bool = False,
         resume_pdf: "Path | None" = None, headless: bool = False, keep_open: bool = False,
-        session_factory=None, opener=None, input_fn=input, reapply: bool = False) -> dict:
+        session_factory=None, opener=None, input_fn=input, reapply: bool = False,
+        resume_from: "Path | None" = None) -> dict:
     """`session_factory(job_dir) -> BrowserSession` lets tests drive the run with a scripted user; `opener(url)` and
-    `input_fn(prompt)` stand in for the default browser and the terminal in prepare mode."""
-    profile = P.load_profile(PROFILE_FILE)
+    `input_fn(prompt)` stand in for the default browser and the terminal in prepare mode. `resume_from` is a job
+    folder from an earlier run: its tailored resume and cover letter are reused instead of being made again."""
+    if not PROFILE_FILE.exists():
+        raise SystemExit(f"{PROFILE_FILE.name} not found. Copy profile.example.yaml to {PROFILE_FILE.name} and replace "
+                         "every TODO with your own answer (it is gitignored, so it stays on this machine).")
+    try:
+        profile = P.load_profile(PROFILE_FILE)
+    except P.ProfileError as e:
+        raise SystemExit(f"{PROFILE_FILE.name} has problems to fix first: {e}")
     todos = P.find_todos(profile)
     if todos:
         raise SystemExit(f"profile.yaml still has TODO in: {', '.join(todos)}")
@@ -280,9 +299,23 @@ def run(url: str, *, mode: "str | None" = None, allow_submit: "str | None" = Non
                          f"{prev['company']} | {prev['role']}. Nothing was done. Add --reapply to apply again anyway.")
     if used in ("assist", "auto") and headless:
         raise SystemExit("assist / auto need a visible browser window (do not use --headless).")
-    adapter = adapter_for(job.platform)
+    try:
+        adapter = adapter_for(job.platform)
+    except KeyError as e:
+        raise SystemExit(f"{e.args[0]}. Only Greenhouse and Lever postings can be filled so far.")
 
-    if resume_pdf is None:
+    if resume_from is not None:
+        job_dir = Path(resume_from)
+        if not job_dir.is_dir():
+            raise SystemExit(f"--resume-from: {job_dir} is not a folder.")
+        resume_pdf = job_dir / tailor.PDF_NAME
+        if resume_pdf.exists():
+            print(f"2/6 Reusing the tailored resume (and cover letter, if one was saved) from {job_dir.name}")
+        else:
+            print(f"2/6 {job_dir.name} has no tailored resume yet: tailoring now (uses your Claude Pro usage)...")
+            result = tailor.tailor_job(job.company, job.role, job.jd_text, job.canonical_url, job_dir=job_dir)
+            resume_pdf = Path(result["resume_pdf"])
+    elif resume_pdf is None:
         print("2/6 Tailoring the resume (uses your Claude Pro usage)...")
         result = tailor.tailor_job(job.company, job.role, job.jd_text, job.canonical_url)
         job_dir, resume_pdf = Path(result["job_dir"]), Path(result["resume_pdf"])
@@ -297,7 +330,11 @@ def run(url: str, *, mode: "str | None" = None, allow_submit: "str | None" = Non
         job_dir.mkdir(parents=True, exist_ok=True)
         print(f"2/6 Using the given resume: {resume_pdf}")
 
-    cover = coverletter.make_provider(job_dir, job.company, job.role, job.jd_text, resume, llm=tailor.call_claude)
+    ended = ended_job(profile)
+    if ended:
+        print(f"    note: the job at {ended[0]} ended on {P.human_date(ended[1])}; resume dates and cover letters use the past tense")
+    cover = coverletter.make_provider(job_dir, job.company, job.role, job.jd_text, resume, llm=tailor.call_claude,
+                                      ended=ended)
     meta: dict = {"mode": used, "mode_requested": requested, "mode_note": mode_note, "url": url,
                   "canonical_url": job.canonical_url, "platform": job.platform, "company": job.company,
                   "role": job.role, "location": job.location, "resume_pdf": str(resume_pdf),
@@ -306,8 +343,12 @@ def run(url: str, *, mode: "str | None" = None, allow_submit: "str | None" = Non
     outcome: dict = {"status": "dry_run", "confirmation": None}
 
     if used == "prepare":
-        return _prepare(job, job_dir, resume_pdf, resume, profile, cover, meta, requested,
-                        opener=opener, input_fn=input_fn)
+        try:
+            return _prepare(job, job_dir, resume_pdf, resume, profile, cover, meta, requested,
+                            opener=opener, input_fn=input_fn)
+        except tailor.UsageLimitError as e:
+            e.job_dir = e.job_dir or job_dir
+            raise
 
     print(f"3/6 Opening the form ({'submitting is disabled for the whole browser' if used == 'dry-run' else 'REAL MODE'})...")
     try:
@@ -376,6 +417,9 @@ def run(url: str, *, mode: "str | None" = None, allow_submit: "str | None" = Non
                 b.pause_for_user("Dry run finished. Look at the form; NOTHING was submitted. Press Enter to close.")
     except BrowserError as e:
         raise SystemExit(str(e))
+    except tailor.UsageLimitError as e:
+        e.job_dir = e.job_dir or job_dir
+        raise
 
     out = A.to_json(answers)
     out["meta"] = meta
@@ -410,10 +454,15 @@ def run(url: str, *, mode: "str | None" = None, allow_submit: "str | None" = Non
 def main() -> None:
     ap = argparse.ArgumentParser(description="Fill an application form; submits only with --mode and --allow-submit.")
     ap.add_argument("--url")
+    ap.add_argument("--resume-from", type=Path, metavar="JOB_FOLDER",
+                    help="continue an earlier run: reuse that folder's tailored resume and cover letter "
+                         "(the url is read from the folder if --url is not given)")
     ap.add_argument("--mark-submitted", type=Path, metavar="JOB_FOLDER",
                     help="record a prepared application (that folder) as submitted by hand, then exit")
     ap.add_argument("--status", nargs="?", const=20, type=int, metavar="N",
                     help="show the N most recent tracked applications (default 20), then exit")
+    ap.add_argument("--mark-applied", metavar="IDS",
+                    help="you applied by hand: mark these tracker ids (or URLs), comma-separated, as Submitted, then exit")
     ap.add_argument("--sync-sheet", action="store_true",
                     help="push every tracked application to the Google Sheet (first run opens a Google sign-in), then exit")
     ap.add_argument("--import-existing", action="store_true",
@@ -430,6 +479,16 @@ def main() -> None:
     args = ap.parse_args()
     if args.mark_submitted:
         mark_submitted(args.mark_submitted)
+        return
+    if args.mark_applied:
+        with tracker.Tracker(_tracker_file()) as t:
+            for ref in [x.strip() for x in args.mark_applied.split(",") if x.strip()]:
+                print(f"{ref}: {t.mark_applied(ref)}")
+            try:
+                if client := _sheet_client():
+                    print("Google Sheet:", sheets.sync(t, client))
+            except sheets.SheetsError as e:
+                print(f"(Google Sheet not updated: {e})")
         return
     if args.sync_sheet:
         cfg = cfgmod.load_config(CONFIG_FILE)
@@ -448,12 +507,18 @@ def main() -> None:
             if args.status is not None or args.import_existing:
                 print(tracker.format_status(t.recent(args.status or 20), t.counts()))
         return
-    if not args.url:
-        ap.error("--url is required")
+    url = args.url or (url_of_folder(args.resume_from) if args.resume_from else None)
+    if not url:
+        ap.error("--url is required (or --resume-from a folder from an earlier run)")
     try:
-        run(args.url, mode=args.mode, allow_submit=args.allow_submit, dry_run=args.dry_run,
-            resume_pdf=args.resume_pdf, headless=args.headless, keep_open=args.keep_open, reapply=args.reapply)
-    except (tailor.TailorError, intake.IntakeError, cfgmod.ConfigError) as e:
+        run(url, mode=args.mode, allow_submit=args.allow_submit, dry_run=args.dry_run,
+            resume_pdf=args.resume_pdf, headless=args.headless, keep_open=args.keep_open, reapply=args.reapply,
+            resume_from=args.resume_from)
+    except tailor.UsageLimitError as e:
+        again = (f"\nContinue with:  python apply.py --resume-from \"{e.job_dir}\"  (add the same --mode / --allow-submit "
+                 "flags as before; what is already in that folder is reused)") if e.job_dir else ""
+        sys.exit(f"{e}{again}")
+    except (tailor.TailorError, intake.IntakeError, cfgmod.ConfigError, P.ProfileError, sheets.SheetsError) as e:
         sys.exit(f"{type(e).__name__}: {e}")
 
 

@@ -68,7 +68,7 @@ class Tracking(unittest.TestCase):
     def test_without_a_submission_the_latest_run_wins(self):
         self.t.record_folder(folder(self.root, "a", LV, "failed", finished="2026-10-01T10:00:00"))
         self.t.record_folder(folder(self.root, "b", LV, "prepared", mode="prepare", finished="2026-10-02T10:00:00"))
-        self.assertEqual(self.t.job(LV)["status"], "prepared")
+        self.assertEqual(self.t.job(LV)["status"], "ready_for_you")            # a run's "prepared" is Ready for you
         self.assertFalse(self.t.is_submitted(LV))
 
     def test_manual_submission_is_shown_as_manual(self):
@@ -76,7 +76,7 @@ class Tracking(unittest.TestCase):
                                     submitted_on="2026-10-02"))
         text = T.format_status(self.t.recent(), self.t.counts())
         self.assertIn("manual", text)
-        self.assertIn("submitted: 1", text)
+        self.assertIn("Submitted: 1", text)
         self.assertEqual(self.t.job(LV)["submitted_at"], "2026-10-02")
 
     def test_url_variants_are_the_same_posting(self):

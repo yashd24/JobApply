@@ -27,7 +27,8 @@ class LoadResumeData(unittest.TestCase):
     def load(self, text=None):
         if text is not None:
             self.path.write_text(text, encoding="utf-8")
-        with mock.patch.object(tailor, "CONTACT_FILE", self.path):
+        with mock.patch.object(tailor, "CONTACT_FILE", self.path), \
+                mock.patch.object(tailor, "PROFILE_FILE", Path(self.tmp.name) / "no-profile.yaml"):   # not the real one
             return tailor.load_resume_data()
 
     def test_contact_is_merged_into_the_resume_data_and_rendered(self):

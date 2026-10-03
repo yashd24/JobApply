@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import json
 import re
+from datetime import date
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable
@@ -157,7 +158,8 @@ def save_history(path: Path | None, entry: dict, keep: int = 30) -> None:
 
 def check_letter(text: str, resume: dict, cfg: dict, jd_text: str | None = None,
                  quotes: list[str] | None = None, previous_closers: list[str] | None = None,
-                 names: str = "", sources: list[str] | None = None) -> list[str]:
+                 names: str = "", sources: list[str] | None = None,
+                 ended: "tuple[str, date] | None" = None) -> list[str]:
     """Every reason this letter must not be used. An empty list means it passes. With jd_text, the letter
     must also be anchored to the job description by verbatim quotes (see quote_problems). `names` is the company and
     role: digits in them ("project44", "Engineer 2") are not claims, so they are allowed."""
@@ -198,6 +200,10 @@ def check_letter(text: str, resume: dict, cfg: dict, jd_text: str | None = None,
     if jd_text is not None:
         problems += quote_problems(text, jd_text, quotes or [])
     problems += repeated_openers(text)
+    if ended:                               # (company, last working day): that job is over, so past tense only
+        from jobbot import tense
+        from jobbot.profile import human_date
+        problems += tense.letter_problems(text, ended[0], human_date(ended[1]))
     if unbacked := sorted((_word_set(text) & _OUTCOME_WORDS) - _word_set(vis)):
         problems.append(f"claims an improvement the resume does not state: {unbacked}")
     if jd_text is not None:
@@ -285,12 +291,20 @@ def _visible_data(resume: dict) -> dict:
 
 
 def build_prompt(company: str, role: str, jd_text: str, resume: dict, cfg: dict, samples: list[str],
-                 problems: list[str] | None = None, closing: str = "", model: str = "") -> str:
+                 problems: list[str] | None = None, closing: str = "", model: str = "",
+                 ended: "tuple[str, date] | None" = None) -> str:
     rules = "\n".join(f"- {r}" for r in cfg["style_rules"])
     banned = ", ".join(f'"{p}"' for p in cfg["banned_phrases"])
     shown = "\n\n".join(f"--- tone sample {i} ---\n{s}" for i, s in enumerate(samples, 1))
     retry = ("\nYOUR PREVIOUS ATTEMPT WAS REJECTED. Fix every one of these problems:\n"
              + "\n".join(f"- {p}" for p in problems) + "\n") if problems else ""
+    tense = ""
+    if ended:
+        from jobbot.profile import human_date
+        tense = (f"\nTENSE: the candidate's job at {ended[0]} ENDED on {human_date(ended[1])}. Describe it in the PAST tense "
+                 f"only (\"At {ended[0]}, I owned...\", \"I led...\"). Never call it the current or present position, never write "
+                 f"currently / presently / now about it, never \"I work at {ended[0]}\", and no present-tense verbs for what "
+                 f"was done there (not \"I own\", \"I lead\", \"I manage\"). The resume dates below already show the end month.\n")
     L = cfg["length"]
     cap1 = (cfg.get("first_paragraph") or {}).get("max_sentences", MAX_FIRST_PARAGRAPH_SENTENCES)
     main = (f"""
@@ -323,7 +337,7 @@ HOW TO WRITE
 - Tone: confident and professional, never eager. Show interest through specific connections to the role, not through
   enthusiasm words. Never write "love to", "eager to", "excited to", "would be thrilled", "dream", or "please reach out".
 - Paragraph 1 is AT MOST {cap1} sentences: state your intent plainly ("I'm applying for the {role} role at {company}.")
-  and connect the role to your own work in one clause or sentence (what you do now that bears on it). Do NOT summarise
+  and connect the role to your own work in one clause or sentence (the work you have done that bears on it). Do NOT summarise
   or restate the job description to the company: they wrote it. No list of what the role involves.
   Paragraph 1 is short (about 35 words), so paragraph 2 carries the letter: 120-140 words, in full sentences, and
   paragraph 3 about 30 words, for a total of about 190. A letter under {L['words_min']} words is rejected: count before answering.
@@ -353,7 +367,7 @@ HOW TO WRITE
 - Name only technologies that appear in the resume above. Never mention salary, visa, notice period,
   relocation or personal characteristics.
 - Never use these phrases: {banned}
-{retry}{main}
+{retry}{main}{tense}
 WRITING SAMPLES (use them ONLY for sentence length and plain wording. They are outdated and more eager than the letter
 should be: take NO facts, skills, job titles or employers, no enthusiasm phrases ("love to", "excited", "eager"), and do
 not copy their long technology lists or openers):
@@ -363,20 +377,23 @@ not copy their long technology lists or openers):
 
 def generate(company: str, role: str, jd_text: str, resume: dict, cfg: dict, samples: list[str],
              llm: Callable[[str], dict], attempts: int = 2, closing: str = "",
-             previous_closers: list[str] | None = None, model: str = "") -> LetterResult:
+             previous_closers: list[str] | None = None, model: str = "",
+             ended: "tuple[str, date] | None" = None) -> LetterResult:
     """Ask for a letter; if the guard rejects it, ask once more with the reasons. Never returns a failing letter."""
     result = LetterResult(text=None, ok=False)
     problems: list[str] | None = None
     for _ in range(attempts):
         try:
-            reply = llm(build_prompt(company, role, jd_text, resume, cfg, samples, problems, closing, model))
+            reply = llm(build_prompt(company, role, jd_text, resume, cfg, samples, problems, closing, model, ended))
             text = str(reply.get("letter", "")).strip()
             quotes = [str(q) for q in reply.get("jd_quotes") or []]
         except Exception as e:                               # Claude unavailable: no letter, never a guess
+            if type(e).__name__ == "UsageLimitError":          # the limit is not a bad letter: stop and say so
+                raise
             result.attempts.append({"text": "", "problems": [f"LLM call failed: {type(e).__name__}: {e}"[:200]]})
             break
         problems = (check_letter(text, resume, cfg, jd_text, quotes, previous_closers, f"{company} {role}",
-                                 list(samples) + ([model] if model else [])) if text
+                                 list(samples) + ([model] if model else []), ended) if text
                     else ["empty reply"])
         result.attempts.append({"text": text, "problems": problems, "jd_quotes": quotes})
         if not problems:
@@ -427,10 +444,30 @@ def render_pdf(resume: dict, body: str, build_dir: Path, out_pdf: Path) -> Path:
 
 # ─── the provider the answer pipeline calls ─────────────────────────────────
 
+def _saved_letter(job_dir: Path, resume: dict) -> "str | None":
+    """The body of the letter a previous run saved in this job folder, or None."""
+    f = Path(job_dir) / "cover_letter.txt"
+    try:
+        text = f.read_text(encoding="utf-8").strip() if f.exists() else ""
+    except OSError:
+        return None
+    head, tail = "Hello,", f"Best regards,\n{resume.get('name', '')}"
+    if not (text.startswith(head) and text.endswith(tail)):
+        return None
+    return text[len(head):-len(tail)].strip() or None
+
+
+def _hard_problems(text: str, resume: dict, cfg: dict, ended, names: str) -> list[str]:
+    """The guard for a letter being reused: every rule except 'the quotes anchor it to the JD' and the closing-repeat
+    history (the letter was already accepted once, and is already in that history)."""
+    return check_letter(text, resume, cfg, None, None, None, names, None, ended)
+
+
 def make_provider(job_dir: Path, company: str, role: str, jd_text: str, resume: dict, llm: Callable[[str], dict],
                   cfg: dict | None = None, samples: list[str] | None = None,
                   renderer: Callable[[dict, str, Path, Path], Path] = render_pdf,
-                  history_path: "Path | None" = None, model: "str | None" = None):
+                  history_path: "Path | None" = None, model: "str | None" = None,
+                  ended: "tuple[str, date] | None" = None):
     """field -> (value, note). value is the letter text (text box) or the PDF path (file upload), or None when
     the letter could not be produced. One letter per job: generated on first use, reused for every field.
     `history_path` remembers the closing style and closing sentence of recent letters so the next letter
@@ -444,15 +481,20 @@ def make_provider(job_dir: Path, company: str, role: str, jd_text: str, resume: 
     cache: dict = {}
 
     def provider(f) -> tuple["str | None", str]:
+        if "res" not in cache and (saved := _saved_letter(job_dir, resume)) \
+                and not _hard_problems(saved, resume, cfg, ended, f"{company} {role}"):
+            cache["res"] = LetterResult(text=saved, ok=True, attempts=[{"text": saved, "problems": [], "reused": True}])
+            cache["reused"] = True
         if "res" not in cache:
             history = load_history(history_path)
             closing = choose_closing(cfg, company, role, [h.get("style", "") for h in history])
             cache["res"] = generate(company, role, jd_text, resume, cfg, samples, llm, closing=closing,
-                                    previous_closers=[h.get("closing", "") for h in history], model=model)
+                                    previous_closers=[h.get("closing", "") for h in history], model=model,
+                                    ended=ended)
             job_dir.mkdir(parents=True, exist_ok=True)
             (job_dir / "cover_letter_attempts.json").write_text(
                 json.dumps(cache["res"].attempts, indent=2, ensure_ascii=False), encoding="utf-8")
-            if cache["res"].ok:
+            if cache["res"].ok and not cache.get("reused"):
                 (job_dir / "cover_letter.txt").write_text(full_letter(resume, cache["res"].text) + "\n",
                                                           encoding="utf-8")
                 save_history(history_path, {"company": company, "style": closing,

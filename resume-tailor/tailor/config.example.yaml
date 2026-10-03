@@ -32,3 +32,22 @@ platforms:
 # sheets:
 #   spreadsheet_id: ""
 #   sheet_name: Applications
+
+# Job discovery (python discover.py): saved searches run through python-jobspy. Each search term is run in each
+# location on each site; postings are filtered cheaply (title, age, location, experience asked, duplicates) with no
+# Claude calls, saved as "found", and shown as a shortlist for you to approve. JobSpy scrapes public job pages
+# (no login); keep the numbers modest, because LinkedIn in particular rate-limits (it blocks around page 10).
+discovery:
+  search_terms: [backend engineer, software development engineer, python developer, software engineer]
+  locations:
+    - {name: Bengaluru, query: "Bengaluru, Karnataka, India"}
+    - {name: Remote India, query: India, remote: true}
+  sites: [indeed, naukri, linkedin]
+  max_age_days: 30
+  results_per_search: 30          # per site, per term, per location
+  country: india                  # JobSpy's country_indeed
+  max_min_experience_years: 2     # drop postings whose MINIMUM experience is above this (yours is about 1.8)
+  fetch_description: true         # needed for LinkedIn / Naukri text and Naukri's external apply link (1 extra request each)
+  delay_between_searches_s: [5, 10]
+  # accept_cities: [Bengaluru, Bangalore]   # defaults; also accepted: remote postings located in `country_name`
+  # title_include / title_exclude: regexes; see jobbot/discovery.py for the defaults (interns, managers, QA... are dropped)

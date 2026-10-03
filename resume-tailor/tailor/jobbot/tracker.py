@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import sqlite3
+import re
 from datetime import datetime
 from pathlib import Path
 
@@ -26,7 +27,55 @@ CREATE TABLE IF NOT EXISTS jobs (
   answers_path TEXT, screenshots TEXT, flagged_fields TEXT, created_at TEXT, submitted_at TEXT, notes TEXT,
   runs INTEGER DEFAULT 0);
 """
-STATUSES = ("submitted", "needs_review", "failed", "prepared", "dry_run")
+# The statuses a posting moves through. "ready_for_you" is what a run's own "prepared" becomes: the bot has done its part
+# and the next step is yours. dry_run is internal (a rehearsal), never an application.
+STATUS_LABELS = {"found": "Found", "approved": "Approved", "ready_for_you": "Ready for you", "needs_review": "Needs review",
+                 "manual": "Manual", "failed": "Failed", "submitted": "Submitted", "skipped": "Skipped", "dry_run": "Dry run"}
+STATUSES = ("submitted", "ready_for_you", "needs_review", "failed", "manual", "approved", "found", "skipped", "dry_run")
+RUN_STATUS_MAP = {"prepared": "ready_for_you"}
+ACTION_STATUSES = ("ready_for_you", "needs_review", "failed", "manual")        # waiting on you: the "Action needed" tab
+_ACTION_ORDER = {s: i for i, s in enumerate(ACTION_STATUSES)}
+
+
+def label(status: "str | None") -> str:
+    return STATUS_LABELS.get(status or "", status or "")
+
+
+def run_reason(status: str, res: dict, answers: dict) -> str:
+    """One plain sentence on WHY a run ended in this status, for the Reason column."""
+    verification = res.get("verification") or {}
+    errors = [str(e) for e in (res.get("validation_errors") or []) if e]
+    flagged = (answers.get("summary") or {}).get("flagged")
+    if status == "submitted":
+        if res.get("submitted_by") == "manual":
+            return "submitted by you, by hand (recorded on your word)"
+        return f"confirmation seen ({verification.get('signal') or 'confirmation page'})"
+    if status == "ready_for_you":
+        yours = f"; {flagged} field(s) are yours to answer" if flagged else ""
+        return ("resume and answers are ready" + yours + ": open prepare_sheet.html in the job folder, apply by hand, "
+                "then tick 'Mark applied'")
+    if status == "needs_review":
+        return verification.get("reason") or ("no confirmation was seen: check the employer's page and your email, then "
+                                              "tick 'Mark applied' if it went through")
+    if status == "failed":
+        return "; ".join(errors[:3]) or verification.get("reason") or "the employer refused the submission"
+    if status == "dry_run":
+        return "dry run: nothing was submitted"
+    return ""
+# Columns added for job discovery (existing databases are migrated in place).
+DISCOVERY_COLUMNS = {"route": "TEXT", "source": "TEXT", "source_url": "TEXT", "direct_url": "TEXT",
+                     "experience_asked": "TEXT", "fingerprint": "TEXT", "date_posted": "TEXT", "last_seen": "TEXT",
+                     "reason": "TEXT", "job_folder": "TEXT"}
+_LEGAL_SUFFIX = re.compile(r"\b(pvt|private|ltd|limited|inc|llc|llp|corp|corporation|india|co)\b")
+
+
+def fingerprint(company: "str | None", role: "str | None") -> str:
+    """The same opening listed on two sites: lower-case company and title without punctuation or legal suffixes."""
+    def norm(text: "str | None") -> str:
+        t = re.sub(r"\([^)]*\)", " ", str(text or "").lower())
+        t = _LEGAL_SUFFIX.sub(" ", re.sub(r"[^a-z0-9+#]+", " ", t))
+        return re.sub(r"\s+", " ", t).strip()
+    return f"{norm(company)}|{norm(role)}"
 
 
 def key(url: str) -> str:
@@ -48,6 +97,20 @@ class Tracker:
         self.db = sqlite3.connect(str(self.path))
         self.db.row_factory = sqlite3.Row
         self.db.executescript(SCHEMA)
+        self._migrate()
+
+    def _migrate(self) -> None:
+        have = {r["name"] for r in self.db.execute("PRAGMA table_info(jobs)")}
+        for name, kind in DISCOVERY_COLUMNS.items():
+            if name not in have:
+                self.db.execute(f"ALTER TABLE jobs ADD COLUMN {name} {kind}")
+        if "reason" not in {r["name"] for r in self.db.execute("PRAGMA table_info(runs)")}:
+            self.db.execute("ALTER TABLE runs ADD COLUMN reason TEXT")
+        self.db.execute("UPDATE jobs SET status='ready_for_you' WHERE status='prepared'")
+        self.db.execute("UPDATE runs SET status='ready_for_you' WHERE status='prepared'")
+        for r in self.db.execute("SELECT id, company, role FROM jobs WHERE fingerprint IS NULL").fetchall():
+            self.db.execute("UPDATE jobs SET fingerprint=? WHERE id=?", (fingerprint(r["company"], r["role"]), r["id"]))
+        self.db.commit()
 
     def close(self) -> None:
         self.db.close()
@@ -70,14 +133,15 @@ class Tracker:
         flagged = [a["label"] for a in answers.get("answers", []) if a.get("status") == "flagged"]
         finished = (res.get("submitted_on") or res.get("marked") or outcome.get("finished")
                     or datetime.fromtimestamp((job_dir / "apply_result.json").stat().st_mtime).isoformat(timespec="seconds"))
-        row = {"job_dir": str(job_dir), "canonical_url": key(res["url"]), "status": res["status"], "mode": res.get("mode"),
+        status = RUN_STATUS_MAP.get(res["status"], res["status"])
+        row = {"job_dir": str(job_dir), "canonical_url": key(res["url"]), "status": status, "mode": res.get("mode"),
                "submitted_by": res.get("submitted_by"), "finished_at": finished, "platform": meta.get("platform"),
                "company": res.get("company"), "role": res.get("role"), "location": meta.get("location"),
                "score": (tailored.get("scores") or {}).get("overall"), "gaps": json.dumps(tailored.get("gaps") or []),
                "resume_pdf": meta.get("resume_pdf") or tailored.get("resume_pdf"),
                "answers_path": str(job_dir / "answers.json") if answers else None,
                "screenshots": json.dumps(meta.get("screenshots") or []), "flagged_fields": json.dumps(flagged),
-               "notes": res.get("note")}
+               "notes": res.get("note"), "reason": run_reason(status, res, answers)}
         cols = ", ".join(row)
         self.db.execute(f"INSERT OR REPLACE INTO runs ({cols}) VALUES ({', '.join('?' * len(row))})", list(row.values()))
         self.db.commit()
@@ -92,7 +156,11 @@ class Tracker:
         submitted = [r for r in runs if r["status"] == "submitted"]
         best = submitted[-1] if submitted else runs[-1]
         values = {c: best[c] for c in ("platform", "company", "role", "location", "mode", "submitted_by", "score", "gaps",
-                                       "resume_pdf", "answers_path", "screenshots", "flagged_fields", "notes")}
+                                       "resume_pdf", "answers_path", "screenshots", "flagged_fields", "notes", "reason")}
+        folders = [r["job_dir"] for r in runs if not str(r["job_dir"]).startswith("manual:")]
+        values.update(fingerprint=fingerprint(best["company"], best["role"]),
+                      job_folder=(best["job_dir"] if not str(best["job_dir"]).startswith("manual:")
+                                  else (folders[-1] if folders else None)))
         values.update(status=best["status"], created_at=runs[0]["finished_at"],
                       submitted_at=best["finished_at"] if submitted else None, runs=len(runs))
         cols = list(values)
@@ -101,6 +169,106 @@ class Tracker:
             f"ON CONFLICT(canonical_url) DO UPDATE SET {', '.join(f'{c}=excluded.{c}' for c in cols)}",
             [url] + [values[c] for c in cols])
         self.db.commit()
+
+    # ── discovery (M9): found -> approved / manual / skipped, then the normal run statuses ──
+    def add_found(self, rec: dict) -> str:
+        """Save a discovered posting as status "found". Returns "new", "seen" (already found, refreshed),
+        "replaced" (a manual-route twin of this opening was swapped for this ATS link) or "duplicate" (this URL or
+        this company+title is already in the tracker in any other state: applied, prepared, skipped, dry run...)."""
+        url = key(rec["canonical_url"])
+        fp = fingerprint(rec.get("company"), rec.get("role"))
+        now = datetime.now().isoformat(timespec="seconds")
+        cols = {"platform": rec.get("platform"), "company": rec.get("company"), "role": rec.get("role"),
+                "location": rec.get("location"), "route": rec.get("route"), "source": rec.get("source"),
+                "source_url": rec.get("source_url"), "direct_url": rec.get("direct_url"),
+                "experience_asked": rec.get("experience_asked"), "date_posted": rec.get("date_posted"),
+                "notes": rec.get("notes"), "fingerprint": fp,
+                "reason": rec.get("reason") or rec.get("notes") or f"found on {rec.get('source') or 'a job board'}"}
+        existing = self.db.execute("SELECT * FROM jobs WHERE canonical_url=?", (url,)).fetchone()
+        if existing:
+            if existing["status"] != "found":
+                return "duplicate"
+            sets = ", ".join(f"{c}=?" for c in cols) + ", last_seen=?"
+            self.db.execute(f"UPDATE jobs SET {sets} WHERE id=?", [*cols.values(), now, existing["id"]])
+            self.db.commit()
+            return "seen"
+        twin = self.db.execute("SELECT * FROM jobs WHERE fingerprint=? AND canonical_url!=?", (fp, url)).fetchone()
+        outcome = "new"
+        if twin:
+            if twin["status"] == "found" and twin["route"] == "manual" and rec.get("route") != "manual":
+                self.db.execute("DELETE FROM jobs WHERE id=?", (twin["id"],))
+                outcome = "replaced"
+            else:
+                return "duplicate"
+        names = ["canonical_url", "status", "created_at", "last_seen", *cols]
+        self.db.execute(f"INSERT INTO jobs ({', '.join(names)}) VALUES ({', '.join('?' * len(names))})",
+                        [url, "found", now, now, *cols.values()])
+        self.db.commit()
+        return outcome
+
+    def is_known(self, url: "str | None" = None, company: "str | None" = None, role: "str | None" = None) -> bool:
+        """Is this URL, or this company+title, already in the tracker in any state other than found?"""
+        if url and (r := self.job(url)) and r["status"] != "found":
+            return True
+        fp = fingerprint(company, role)
+        return bool(company and self.db.execute("SELECT 1 FROM jobs WHERE fingerprint=? AND status!='found'", (fp,)).fetchone())
+
+    def found(self) -> list[sqlite3.Row]:
+        """The shortlist: discovered postings still waiting for a decision. ATS routes first, then newest."""
+        return self.db.execute(
+            "SELECT * FROM jobs WHERE status='found' ORDER BY (route='manual'), COALESCE(date_posted, '') DESC, id").fetchall()
+
+    def by_ids(self, ids: list[int]) -> list[sqlite3.Row]:
+        marks = ", ".join("?" * len(ids))
+        return self.db.execute(f"SELECT * FROM jobs WHERE id IN ({marks}) ORDER BY id", list(ids)).fetchall() if ids else []
+
+    def decide(self, ids: list[int], approve: bool) -> dict:
+        """Approve or skip shortlisted postings (only ones still in status found). An approved ATS posting waits for the
+        batch runner ("approved"); an approved manual one goes straight to the sheet as "manual" with its link."""
+        out = {"approved": [], "manual": [], "skipped": [], "ignored": []}
+        for r in self.by_ids(ids):
+            if r["status"] != "found":
+                out["ignored"].append(r["id"])
+                continue
+            new = ("manual" if r["route"] == "manual" else "approved") if approve else "skipped"
+            why = {"manual": "no direct Greenhouse or Lever link: apply on the employer's page (link in the sheet), then "
+                             "tick 'Mark applied'",
+                   "approved": "approved: waits for the batch runner", "skipped": "declined from the shortlist"}[new]
+            self.db.execute("UPDATE jobs SET status=?, reason=? WHERE id=?", (new, why, r["id"]))
+            out[new].append(r["id"])
+        out["ignored"] += [i for i in ids if i not in {r["id"] for r in self.by_ids(ids)}]
+        self.db.commit()
+        return out
+
+    def action_needed(self) -> list[sqlite3.Row]:
+        """Everything waiting on YOU: prepared and ready, needs a look, failed, or to be applied for by hand."""
+        marks = ", ".join("?" * len(ACTION_STATUSES))
+        rows = self.db.execute(f"SELECT * FROM jobs WHERE status IN ({marks}) ORDER BY id", list(ACTION_STATUSES)).fetchall()
+        return sorted(rows, key=lambda r: (_ACTION_ORDER[r["status"]], r["id"]))
+
+    def mark_applied(self, ref: "int | str") -> str:
+        """You applied by hand (the sheet's 'Mark applied' tick, or --mark-applied). The posting becomes Submitted,
+        submitted_by manual. Recorded as a run of its own, so later runs or refreshes can never undo it.
+        Returns "marked", "already" (it was already Submitted) or "unknown"."""
+        job = self.db.execute("SELECT * FROM jobs WHERE id=?", (int(ref),)).fetchone() if str(ref).isdigit() else self.job(str(ref))
+        if job is None:
+            return "unknown"
+        if job["status"] == "submitted":
+            return "already"
+        now = datetime.now().isoformat(timespec="seconds")
+        self.db.execute(
+            "INSERT OR REPLACE INTO runs (job_dir, canonical_url, status, mode, submitted_by, finished_at, platform, company, "
+            "role, location, score, gaps, resume_pdf, answers_path, screenshots, flagged_fields, notes, reason) "
+            "VALUES (?, ?, 'submitted', ?, 'manual', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (f"manual:{job['id']}:{now}", job["canonical_url"], job["mode"], now, job["platform"], job["company"], job["role"],
+             job["location"], job["score"], job["gaps"], job["resume_pdf"], job["answers_path"], job["screenshots"],
+             job["flagged_fields"], job["notes"], "marked as applied by you"))
+        self.db.commit()
+        self._refresh(job["canonical_url"])
+        return "marked"
+
+    def approved(self) -> list[sqlite3.Row]:
+        return self.db.execute("SELECT * FROM jobs WHERE status='approved' ORDER BY id").fetchall()
 
     def import_existing(self, output_dir: Path) -> int:
         n = 0
@@ -132,8 +300,8 @@ def format_status(rows: list, counts: dict) -> str:
     for r in rows:
         when = (r["submitted_at"] or r["created_at"] or "")[:10]
         by = "manual" if r["submitted_by"] == "manual" else (r["mode"] or "")
-        lines.append(f"{when:<11} {r['status']:<13} {by:<8} {(r['company'] or '')[:17]:<18} "
+        lines.append(f"{when:<11} {label(r['status']):<13} {by:<8} {(r['company'] or '')[:17]:<18} "
                      f"{(r['role'] or '')[:33]:<34} {r['canonical_url']}")
     lines.append("")
-    lines.append("  ".join(f"{s}: {counts[s]}" for s in STATUSES if s in counts))
+    lines.append("  ".join(f"{label(s)}: {counts[s]}" for s in STATUSES if s in counts))
     return "\n".join(lines)
