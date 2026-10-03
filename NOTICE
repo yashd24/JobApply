@@ -1,0 +1,26 @@
+Job Apply (jobbot)
+Copyright 2026 Yashdeep Sahu
+
+This project is licensed under the Apache License, Version 2.0 (see LICENSE).
+
+It bundles the following third-party material, each under its own license:
+
+1. LaTeX resume template (template/resume-openfont.cls, template/*.sty)
+   From "modern-deedy" by abdullah-arif-swe (its class header reads "Abdullah's version"),
+   https://github.com/Aarif123456/modern-deedy, licensed under the Apache License 2.0
+   (a copy is in template/LICENSE). modern-deedy is a one-page, single-column fork of
+   Deedy Resume by Debarghya Das, https://github.com/deedy/Deedy-Resume, also under the
+   Apache License 2.0. The template files are used here to render the tailored resume.
+
+2. Lato fonts (template/fonts/Lato/)
+   Copyright (c) 2010-2014 by tyPoland Lukasz Dziedzic (team@latofonts.com) with Reserved
+   Font Name "Lato". Licensed under the SIL Open Font License, Version 1.1
+   (template/fonts/Lato/OFL.txt).
+
+3. Raleway fonts (template/fonts/Raleway/)
+   Copyright 2010 The Raleway Project Authors (impallari@gmail.com), with Reserved Font
+   Name "Raleway". Licensed under the SIL Open Font License, Version 1.1
+   (template/fonts/Raleway/OFL.txt).
+
+Python dependencies (Playwright, PyYAML, pypdf, requests, Beautiful Soup, python-jobspy and
+others) are installed separately and keep their own licenses.
