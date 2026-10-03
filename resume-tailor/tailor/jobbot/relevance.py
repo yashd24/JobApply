@@ -101,7 +101,8 @@ _GAP = re.compile(r"\b(gap|gaps|lack|lacks|lacking|missing|not shown|unshown|str
 # Words that mean "this is a real problem". A score of 7+ with one of these in its own reason contradicts itself.
 _STRONG = re.compile(
     r"\b(major|significant|serious|large|big|substantial|critical|key)\s+(gap|gaps|mismatch|stretch)\b|"
-    r"\bbelow\s+(the\s+)?(candidate'?s\s+)?(level|experience|seniority)\b|\bover-?qualified\b|"
+    r"\bbelow\b[^.;]{0,30}\b(level|experience|seniority)\b|\b(level|seniority)\b[^.;]{0,25}\bbelow\b|"
+    r"\b(fresher|entry|junior)[- ]level\b|\btoo junior\b|\bover-?qualified\b|"
     r"\b(far|well|much)\s+(above|below)\b|\bmismatch\b|\bnot really a software\b|"
     r"\b(mainly|mostly|primarily)\s+(needs|requires|centers|centres|focused|about|java|c\+\+|\.net|go\b|golang)", re.I)
 _JAVA_TITLE = re.compile(r"\bjava\b|\bspring\s*boot\b|\bj2ee\b|\bkotlin\b|\bscala\b", re.I)
@@ -162,6 +163,7 @@ def apply_rules(row, score: int, reason: str, exceptional: bool, rules: "Rules")
 @dataclass
 class Parsed:
     scores: dict = field(default_factory=dict)         # id -> (score, reason)
+    exceptional: dict = field(default_factory=dict)    # id -> the model's "exceptional" flag (only True counts)
     rejected: list = field(default_factory=list)       # (id or None, why)
 
 
@@ -197,6 +199,7 @@ def parse_reply(reply: dict, rows: list, rules: "Rules | None" = None) -> Parsed
         if rules is not None:
             score, reason = apply_rules(ids[jid], score, reason, e.get("exceptional") is True, rules)
         out.scores[jid] = (score, reason)
+        out.exceptional[jid] = e.get("exceptional") is True
     return out
 
 
@@ -228,11 +231,29 @@ def score_unscored(tracker, llm, resume: dict, profile: dict, *, batch_size: int
             rep.left_unscored += [r["id"] for r in batch]
             continue
         for jid, (score, reason) in parsed.scores.items():
-            tracker.set_relevance(jid, score, reason)
+            tracker.set_relevance(jid, score, reason, parsed.exceptional.get(jid, False))
             rep.scored += 1
         rep.left_unscored += [r["id"] for r in batch if r["id"] not in parsed.scores]
         rep.problems += [f"batch {rep.calls}: job {jid if jid is not None else '?'}: {why}" for jid, why in parsed.rejected]
     return rep
+
+
+def recap_found(tracker, rules: "Rules", log=print) -> list:
+    """Apply the CURRENT caps to the scores already stored on Found postings (no Claude, no network), so a rule change takes
+    effect at once. A score stored before the model's "exceptional" flag was kept counts as exceptional if it is 7 or more
+    (that is the only way a 3+ year posting got past the cap), so rule 1 never removes a pass it once granted."""
+    changed = []
+    for r in tracker.found():
+        if r["relevance"] is None:
+            continue
+        flag = r["relevance_exceptional"]
+        exceptional = bool(flag) if flag is not None else r["relevance"] >= 7
+        score, reason = apply_rules(r, r["relevance"], r["relevance_reason"] or "", exceptional, rules)
+        if score != r["relevance"]:
+            tracker.set_relevance(r["id"], score, reason, bool(exceptional))
+            changed.append({"id": r["id"], "company": r["company"], "title": r["role"], "was": r["relevance"], "now": score})
+            log(f"  rescored in place #{r['id']} {r['role']} | {r['company']}: {r['relevance']} -> {score}")
+    return changed
 
 
 def format_top(rows, n: int = 10) -> str:

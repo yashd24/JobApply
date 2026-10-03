@@ -224,6 +224,10 @@ def run_all(cfg: dict, tr: "T.Tracker", *, dry_run: bool = False, skip_discovery
             s["errors"].append(f"scoring: {type(e).__name__}: {str(e)[:160]}")
             log(f"  scoring failed: {s['errors'][-1]}")
     s["unscored_left"] = len(tr.unscored())
+    try:                          # a changed scoring rule applies to scores already stored, with no Claude usage
+        s["recapped"] = len(relevance.recap_found(tr, relevance.rules_from_config(cfg), log=log))
+    except Exception as e:
+        s["errors"].append(f"recap: {type(e).__name__}: {str(e)[:120]}")
 
     # 3b. the strict company-board check: a manual posting that is really a Greenhouse/Lever one moves onto that route
     s["board_check"] = {"checked": 0, "matched": 0, "rerouted": []}

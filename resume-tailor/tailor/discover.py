@@ -149,8 +149,11 @@ def main() -> int:
             return 0
         if args.recheck:
             with T.Tracker(_tracker_file()) as t:
+                from jobbot import relevance
                 gone = D.recheck_found(t, D.load_settings(cfg))
-                print(f"Re-judged {len(t.found()) + len(gone)} Found posting(s): {len(gone)} no longer pass.")
+                recapped = relevance.recap_found(t, relevance.rules_from_config(cfg))
+                print(f"Re-judged {len(t.found()) + len(gone)} Found posting(s): {len(gone)} no longer pass the rules; "
+                      f"{len(recapped)} score(s) lowered by the current scoring caps.")
             return 0
         if args.reset_found:
             with T.Tracker(_tracker_file()) as t:

@@ -329,6 +329,84 @@ class ScoringRules(Base):
         self.assertEqual(R.parse_reply(reply, [row]).scores[row["id"]], (9, "Exact."))
 
 
+class Recap(Base):
+    """A rule change applies to scores already stored, with no Claude usage."""
+
+    def found(self, n, score, reason, exp="1-2 yrs", company="Acme", flag=None, title="Backend Engineer"):
+        url = f"https://www.linkedin.com/jobs/view/{7200000 + n}"
+        self.tr.add_found({"canonical_url": url, "company": f"{company} {n}", "role": f"{title} {n}", "route": "manual",
+                           "source": "linkedin", "source_url": url, "experience_asked": exp, "location": "Bengaluru",
+                           "description": "Python Django. " * 20})
+        jid = self.tr.job(url)["id"]
+        self.tr.set_relevance(jid, score, reason)
+        if flag is None:
+            self.tr.db.execute("UPDATE jobs SET relevance_exceptional=NULL WHERE id=?", (jid,))
+            self.tr.db.commit()
+        else:
+            self.tr.set_relevance(jid, score, reason, flag)
+        return jid
+
+    def test_more_ways_of_saying_below_level_are_caught(self):
+        for reason in ("Junior role accepting Python; the level is slightly below their experience.",
+                       "Python fits but the work is below the candidate's experience.", "Fresher-level role.",
+                       "An entry-level position.", "A junior-level role.", "Too junior for 1.8 years."):
+            s_, why = ScoringRules().score.__func__(ScoringRules(), {"id": 1, "company": "A", "role": "Engineer",
+                                                                    "experience_asked": "", "description": ""}, 8, reason)
+            self.assertEqual(s_, 6, reason)
+
+    def test_a_stored_contradiction_is_lowered_in_place(self):
+        a = self.found(1, 8, "Python fits; the level is slightly below their experience.")
+        b = self.found(2, 8, "Python and Django match; React is a small gap.")
+        changed = R.recap_found(self.tr, R.Rules(), log=lambda *x: None)
+        self.assertEqual([(c["id"], c["was"], c["now"]) for c in changed], [(a, 8, 6)])
+        self.assertEqual(self.tr.by_ids([b])[0]["relevance"], 8)
+        self.assertIn("capped at 6", self.tr.by_ids([a])[0]["relevance_reason"])
+        self.assertEqual(R.recap_found(self.tr, R.Rules(), log=lambda *x: None), [])               # idempotent
+
+    def test_a_three_year_posting_keeps_a_pass_it_was_given_but_loses_one_it_never_earned(self):
+        unknown_high = self.found(1, 8, "Exact stack match.", exp="3-5 yrs")                       # stored before the flag existed
+        earned = self.found(2, 8, "Exact stack match.", exp="3-5 yrs", flag=True)
+        not_earned = self.found(3, 8, "Exact stack match.", exp="3-5 yrs", flag=False)
+        unknown_low = self.found(4, 6, "Good fit.", exp="3-5 yrs")
+        R.recap_found(self.tr, R.Rules(), log=lambda *x: None)
+        got = {i: self.tr.by_ids([i])[0]["relevance"] for i in (unknown_high, earned, not_earned, unknown_low)}
+        self.assertEqual(got, {unknown_high: 8, earned: 8, not_earned: 6, unknown_low: 6})
+
+    def test_only_found_scored_postings_are_touched_and_nothing_is_called(self):
+        a = self.found(1, 8, "Overqualified for this.")
+        self.tr.decide([a], approve=True)
+        unscored = self.found(2, 5, "x")
+        self.tr.db.execute("UPDATE jobs SET relevance=NULL WHERE id=?", (unscored,))
+        self.tr.db.commit()
+        self.assertEqual(R.recap_found(self.tr, R.Rules(), log=lambda *x: None), [])
+        self.assertEqual(self.tr.by_ids([a])[0]["relevance"], 8)                                  # decided: left alone
+
+    def test_the_exceptional_flag_is_stored_when_scoring(self):
+        url = "https://www.linkedin.com/jobs/view/7300001"
+        self.tr.add_found({"canonical_url": url, "company": "Exact Co", "role": "Django Developer", "route": "manual",
+                           "source": "linkedin", "source_url": url, "experience_asked": "3-5 yrs", "location": "Bengaluru",
+                           "description": "Django DRF Celery. " * 20})
+        jid = self.tr.job(url)["id"]
+        R.score_unscored(self.tr, lambda p: {"scores": [{"id": jid, "score": 9, "reason": "Exact stack.", "exceptional": True}]},
+                         RESUME, PROFILE, log=lambda *a: None, rules=R.Rules())
+        r = self.tr.by_ids([jid])[0]
+        self.assertEqual((r["relevance"], r["relevance_exceptional"]), (9, 1))
+        self.assertEqual(self.tr.clear_relevance(), 1)
+        self.assertIsNone(self.tr.by_ids([jid])[0]["relevance_exceptional"])
+
+    def test_a_run_recaps_before_it_approves(self):
+        import run
+        from jobbot import tracker as T
+        a = self.found(1, 8, "Python fits; the level is below the candidate's experience.")
+        s = run.run_all({"discovery": {"search_terms": ["x"], "locations": ["Bengaluru"], "sites": ["indeed"]},
+                         "selection": {"relevance_threshold": 7, "fetch_missing_descriptions": False, "board_check": False},
+                         "batch": {"delay_between_jobs_s": [0, 0], "daily_cap": 3}}, self.tr, dry_run=True, skip_discovery=True,
+                        llm=lambda p: {"scores": []}, profile_loader=lambda: PROFILE, resume_loader=lambda: RESUME,
+                        sync_fn=lambda tr: "ok", log=lambda *x: None)
+        self.assertEqual(s["recapped"], 1)
+        self.assertEqual(s["would_approve"], [])                                                  # 6 is below the threshold
+
+
 class RulesInTheFlow(Base):
     def test_the_caps_apply_when_postings_are_scored_and_are_stored_with_the_note(self):
         url = "https://www.linkedin.com/jobs/view/7100001"

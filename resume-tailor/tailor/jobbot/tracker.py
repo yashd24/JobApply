@@ -71,7 +71,7 @@ DISCOVERY_COLUMNS = {"route": "TEXT", "source": "TEXT", "source_url": "TEXT", "d
                      "experience_asked": "TEXT", "fingerprint": "TEXT", "date_posted": "TEXT", "last_seen": "TEXT",
                      "reason": "TEXT", "job_folder": "TEXT", "description": "TEXT",
                      "relevance": "INTEGER", "relevance_reason": "TEXT", "remote": "INTEGER",
-                     "route_evidence": "TEXT", "board_checked": "TEXT"}
+                     "route_evidence": "TEXT", "board_checked": "TEXT", "relevance_exceptional": "INTEGER"}
 _LEGAL_SUFFIX = re.compile(r"\b(pvt|private|ltd|limited|inc|llc|llp|corp|corporation|india|co)\b")
 
 
@@ -234,13 +234,14 @@ class Tracker:
         """Found postings that have no relevance score yet (they cost nothing until scored)."""
         return self.db.execute("SELECT * FROM jobs WHERE status='found' AND relevance IS NULL ORDER BY id").fetchall()
 
-    def set_relevance(self, job_id: int, score: int, reason: str) -> None:
-        self.db.execute("UPDATE jobs SET relevance=?, relevance_reason=? WHERE id=?", (int(score), reason, job_id))
+    def set_relevance(self, job_id: int, score: int, reason: str, exceptional: bool = False) -> None:
+        self.db.execute("UPDATE jobs SET relevance=?, relevance_reason=?, relevance_exceptional=? WHERE id=?",
+                        (int(score), reason, int(bool(exceptional)), job_id))
         self.db.commit()
 
     def clear_relevance(self) -> int:
         """Forget every score on postings that are still Found, so the next scoring pass redoes them (new scoring rules)."""
-        n = self.db.execute("UPDATE jobs SET relevance=NULL, relevance_reason=NULL WHERE status='found' "
+        n = self.db.execute("UPDATE jobs SET relevance=NULL, relevance_reason=NULL, relevance_exceptional=NULL WHERE status='found' "
                             "AND relevance IS NOT NULL").rowcount
         self.db.commit()
         return n
