@@ -319,8 +319,13 @@ class LockedEndToEnd(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             plan_file = Path(tmp) / "raw.json"
             plan_file.write_text(json.dumps(raw), encoding="utf-8")
+            # tailor_job loads the resume data (which needs the PRIVATE contact.yaml) and reads the PRIVATE profile.yaml (the
+            # job-end rule): neither exists on a fresh clone and neither may matter here, so use this module's fictional DATA.
             with mock.patch.object(tailor, "compile_pdf", lambda t, b: (Path(tmp) / "r.pdf", 1)), \
                     mock.patch.object(tailor, "verified_keywords", lambda r, p: []), \
+                    mock.patch.object(tailor, "load_resume_data", lambda today=None: copy.deepcopy(DATA)), \
+                    mock.patch.object(tailor, "PROFILE_FILE", Path(tmp) / "no-profile.yaml"), \
+                    mock.patch.object(tailor, "CONTACT_FILE", Path(tmp) / "no-contact.yaml"), \
                     mock.patch.object(tailor.shutil, "copy2", lambda *a, **k: None):
                 result = tailor.tailor_job("Acme", "Backend", JD, plan_file=str(plan_file),
                                            output_dir=Path(tmp) / "out")
