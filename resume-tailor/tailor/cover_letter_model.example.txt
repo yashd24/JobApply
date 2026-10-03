@@ -1,0 +1,17 @@
+# Copy to cover_letter_model.txt (gitignored) and paste ONE cover letter you wrote yourself. It is the MAIN style
+# model: the generator matches its structure, rhythm, politeness and how it opens and closes, alongside the
+# writing samples. TONE ONLY: no facts are taken from it (those come from your visible resume), and the guard
+# rejects any letter that reuses 8 words in a row from it. Lines starting with # are ignored. The text below is made up.
+
+Hello,
+
+I am Test User, a backend engineer, and I would like to apply for the Platform Engineer role at Example Corp. I have
+built and run Python services for two years, and your focus on dependable internal tools is the kind of work I am looking for.
+
+At my current company I rebuilt a slow reporting job so it finishes in minutes. I measured first and
+changed one thing at a time, and I would bring the same care to your platform.
+
+I have attached my resume. Thank you for reading, and I hope to hear from you.
+
+Best regards,
+Test User

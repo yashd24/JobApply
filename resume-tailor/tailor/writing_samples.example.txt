@@ -7,7 +7,7 @@
 === Sample 1 (note to a hiring contact) ===
 Hi Priya,
 
-I'm Test User, a backend engineer. I saw the Platform Engineer opening at Example Corp and would love to apply.
+I'm Test User, a backend engineer. I saw the Platform Engineer opening at Example Corp and would like to apply.
 I have attached my resume. Could you point me to the right person to talk to?
 
 Thank you for your time!
@@ -15,7 +15,7 @@ Thank you for your time!
 === Sample 2 (referral request) ===
 Hi Sam,
 
-I would love to apply for the Data Engineer role at Sample Ltd. It would be great if you could refer me.
+I would like to apply for the Data Engineer role at Sample Ltd. It would be great if you could refer me.
 My resume is attached.
 
 Thank you!

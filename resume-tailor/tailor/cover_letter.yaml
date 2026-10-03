@@ -8,13 +8,16 @@ length:
 
 # Tone comes from writing_samples.txt (gitignored). These rules tell the prompt how to use it.
 style_rules:
-  - "Match the tone of the writing samples: short sentences, polite and direct, plain words."
-  - "Phrases like \"I would love to\" are welcome. Close with a simple thank-you."
+  - "Use the writing samples for sentence length and plain wording ONLY: short sentences, polite and direct. Do not take their enthusiasm phrases."
+  - "Sound confident and professional, never eager. State intent plainly (\"I'm applying for...\") and show interest through specific connections to the role, not enthusiasm words (no \"love to\", \"excited to\", \"eager to\", \"dream\"). Close simply, for example \"I'd be glad to discuss this further. Thank you for your time.\""
   - "Take TONE ONLY from the samples. Never take facts from them; they are outdated (for example 'recent graduate', or skills no longer listed). Facts come only from the visible resume content."
   - "Do not copy the samples' weaker habits: no long lists of technologies (pick 1-2 concrete achievements with their real numbers instead) and no generic openers."
+  - "The first paragraph is at most two sentences: state the role and connect it to your work. Never summarise the job description back to the company."
   - "Connect 1-2 specific JD requirements to 1-2 concrete things from the visible resume bullets (one or two achievements, never a list of three), and give each a plain line on why it matters for this role. Mention the company only using facts from the JD."
+  - "Link each achievement to the role naturally, without announcing the link: no 'This matters for your role because...' or 'It fits well with...'. Start no two sentences with the same words."
+  - "Stay as close to the job description's meaning as possible; never broaden it (no 'the world's...', global, industry-leading and the like unless the JD says so)."
   - "Never put words in quotation marks. Paraphrase the job description naturally; the exact phrases go only in jd_quotes, for the guard."
-  - "Close simply and politely, like the samples (for example a short thank-you). Never close with 'In an interview, I would like to discuss...'."
+  - "Close simply and politely (for example a short thank-you). Never close with 'In an interview, I would like to discuss...'."
 
 # Each letter gets a different style of closing (the one used in the last few letters is skipped), so letters
 # sent to different companies do not all end the same way. Edit or add styles freely.
@@ -26,7 +29,11 @@ closing_styles:
   - "Offer to answer any questions about your experience, then thank them for considering your application."
   - "Say you would be happy to hear from them whenever suits, then thank them."
   - "Keep it very short: one sentence of interest in the next steps, then a plain thank you."
-  - "Say you would love to hear more about what the team is working on, then thank them for reading."
+  - "Say you would be glad to discuss this further, then thank them for their time."
+
+# The first paragraph states the role and connects it to the candidate's work; it does not summarise the JD.
+first_paragraph:
+  max_sentences: 2
 
 # How many sentences may contain a number (each is an achievement): the letter describes 1-2, not a list.
 achievements:
@@ -58,3 +65,19 @@ banned_phrases:
   - "how this experience could help"
   - "in an interview"                              # the closing the user does not want
   - "i would like to discuss"
+  - "this matters for your role because"          # announces the link instead of making it
+  - "it fits well with"
+  - "this matters"
+  - "this matches your"
+  - "this is close to"
+  - "which matters for"
+  - "I would love to"                             # reads as desperate in a cover letter
+  - "love to"                                      # also catches I'd love to / would love to
+  - "eager to"
+  - "excited to"
+  - "would be thrilled"
+  - "dream"
+  - "please reach out whenever"
+  - "Dear Hiring Team"                             # the greeting is always "Hello,"
+  - "Dear Sir/Madam"
+  - "To whom it may concern"

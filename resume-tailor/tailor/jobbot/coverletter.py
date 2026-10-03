@@ -27,6 +27,7 @@ ROOT = Path(__file__).resolve().parents[1]
 CONFIG_FILE = ROOT / "cover_letter.yaml"
 SAMPLES_FILE = ROOT / "writing_samples.txt"
 SAMPLES_EXAMPLE = ROOT / "writing_samples.example.txt"
+MODEL_FILE = ROOT / "cover_letter_model.txt"        # the user's own letter: the MAIN style model (gitignored)
 
 _SENSITIVE = re.compile(r"\b(salary|ctc|lpa|lakhs?|compensation|visa|sponsor\w*|work permit|notice period|"
                         r"relocat\w*|gender|ethnic\w*|veteran|disabilit\w*|authori[sz]ed to work|"
@@ -36,9 +37,21 @@ _SENSITIVE = re.compile(r"\b(salary|ctc|lpa|lakhs?|compensation|visa|sponsor\w*|
 _SELF_CLAIM = re.compile(r"\b(taught me|i (have )?learn(ed|t)|learn(ed|t) to|i (really |truly )?(love|like|enjoy|care about|"
                          r"believe|pride myself)|my passion|i am (someone|a person|a (quick|fast) learner)|"
                          r"(much|significantly|dramatically|greatly|vastly) (faster|better|easier|more (reliable|efficient)))\b", re.I)
-MAX_LOVE_TO = 2          # "I would love to" is the user's phrase, but not three times in one letter
 MIN_QUOTES = 2
+MAX_FIRST_PARAGRAPH_SENTENCES = 2     # default for cfg["first_paragraph"]["max_sentences"]
 _PLACEHOLDER = re.compile(r"\[[^\]\n]{1,40}\]|<[^>\n]{1,40}>|\{\{|\}\}|\bTODO\b|lorem ipsum", re.I)
+# Words that make a statement about the company bigger than the job description made it ("the world's logistics
+# networks"). A letter may use one only if the JD itself does.
+_BROADENING = {"world", "worlds", "world's", "worldwide", "global", "globally", "international", "internationally",
+               "entire", "everyone", "everything", "everywhere", "always", "industry", "leading", "largest", "biggest",
+               "best", "top", "premier", "millions", "billions", "countless", "unmatched", "unrivalled", "unrivaled"}
+# Comparatives that state a result ("faster debugging"). The resume is the only source of results, so the letter may
+# use one only if the visible resume uses that word.
+_OUTCOME_WORDS = {"faster", "quicker", "easier", "simpler", "safer", "cheaper", "smoother", "better", "improved",
+                  "reduced", "fewer", "less", "speed", "speeds", "quickly", "efficiency", "efficient", "streamlined",
+                  "accelerate", "accelerated", "boost", "boosted", "enhances", "improves", "reduces"}
+COPY_SPAN = 8                      # words in a row copied from a style sample / model letter
+_GREETING = re.compile(r"\s*(dear|hi|hello|hey|greetings)\b", re.I)
 _QUOTE_MARKS = re.compile('["“”„‟«»]')
 MAX_ACHIEVEMENT_SENTENCES = 2     # default for cfg["achievements"]["max_sentences_with_numbers"]
 _MARKDOWN = re.compile(r"(^|\n)\s*([#>*\-] |\d+\. )|\*\*|`|__")
@@ -71,6 +84,16 @@ def load_samples(path: Path = SAMPLES_FILE) -> tuple[list[str], str]:
     if path.exists():
         return parse_samples(path.read_text(encoding="utf-8")), path.name
     return parse_samples(SAMPLES_EXAMPLE.read_text(encoding="utf-8")), SAMPLES_EXAMPLE.name
+
+
+def load_model(path: Path = MODEL_FILE) -> str:
+    """The user's own cover letter, if they saved one (comment lines starting with # are dropped), else "". There is
+    no made-up fallback: with no file the samples alone set the tone."""
+    try:
+        text = path.read_text(encoding="utf-8") if path.exists() else ""
+    except OSError:
+        return ""
+    return "\n".join(l for l in text.splitlines() if not l.lstrip().startswith("#")).strip()
 
 
 def _norm(s: str) -> str:
@@ -134,7 +157,7 @@ def save_history(path: Path | None, entry: dict, keep: int = 30) -> None:
 
 def check_letter(text: str, resume: dict, cfg: dict, jd_text: str | None = None,
                  quotes: list[str] | None = None, previous_closers: list[str] | None = None,
-                 names: str = "") -> list[str]:
+                 names: str = "", sources: list[str] | None = None) -> list[str]:
     """Every reason this letter must not be used. An empty list means it passes. With jd_text, the letter
     must also be anchored to the job description by verbatim quotes (see quote_problems). `names` is the company and
     role: digits in them ("project44", "Engineer 2") are not claims, so they are allowed."""
@@ -162,12 +185,31 @@ def check_letter(text: str, resume: dict, cfg: dict, jd_text: str | None = None,
         problems.append(f"sensitive topic '{m.group(0)}' (answered only from the profile, never in a letter)")
     if m := _SELF_CLAIM.search(text):
         problems.append(f"claim about the candidate or an outcome that the resume does not state: '{m.group(0)}'")
-    if low.count("i would love to") > MAX_LOVE_TO:
-        problems.append(f"'I would love to' used {low.count('i would love to')} times; at most {MAX_LOVE_TO}")
+    first = (paragraphs(text) or [""])[0]
+    n_first = len([x for x in re.split(r"(?<=[.!?])\s+", first) if x.strip()])
+    cap1 = (cfg.get("first_paragraph") or {}).get("max_sentences", MAX_FIRST_PARAGRAPH_SENTENCES)
+    if n_first > cap1:
+        problems.append(f"the first paragraph has {n_first} sentences; at most {cap1}: state the role and connect it to "
+                        "your work, and do not summarise the job description")
+    if _GREETING.match(text):
+        problems.append("starts with a greeting; the greeting line ('Hello,') is added for you")
     if previous_closers and _squash(closing_line(text)) in {_squash(c) for c in previous_closers}:
         problems.append("the closing sentence is identical to the one in an earlier letter; word it differently")
     if jd_text is not None:
         problems += quote_problems(text, jd_text, quotes or [])
+    problems += repeated_openers(text)
+    if unbacked := sorted((_word_set(text) & _OUTCOME_WORDS) - _word_set(vis)):
+        problems.append(f"claims an improvement the resume does not state: {unbacked}")
+    if jd_text is not None:
+        wide = sorted((_word_set(text) & _BROADENING) - _word_set(jd_text))
+        if wide:
+            problems.append(f"wording broader than the job description says: {wide}; stay as close to the JD's own "
+                            "meaning as possible")
+    for src in sources or []:
+        if span := copied_span(text, src):
+            problems.append(f"copies the style sample / model letter word for word: '{span}'; use the tone, not the "
+                            "sentences")
+            break
     if _QUOTE_MARKS.search(text):
         problems.append("contains quotation marks: paraphrase the job description in natural words (the exact "
                         "phrases belong only in jd_quotes)")
@@ -182,6 +224,32 @@ def check_letter(text: str, resume: dict, cfg: dict, jd_text: str | None = None,
     if _MARKDOWN.search(text):
         problems.append("contains markdown / list formatting; plain paragraphs only")
     return problems
+
+
+def _word_set(text: str) -> set:
+    return {t.lower().replace("\u2019", "'") for t in re.findall(r"[A-Za-z][A-Za-z'\u2019]*", text)}
+
+
+def repeated_openers(text: str) -> list[str]:
+    """No two sentences may start with the same two words ("I would ... / I would ...", "I also ... / I also ...")."""
+    seen: dict = {}
+    for sentence in re.split(r"(?<=[.!?])\s+|\n+", text):
+        first = [w.lower() for w in re.findall(r"[A-Za-z0-9'\u2019-]+", sentence)[:2]]
+        if len(first) == 2:
+            seen[" ".join(first)] = seen.get(" ".join(first), 0) + 1
+    return [f"{n} sentences start with '{opener}'; start each sentence differently"
+            for opener, n in seen.items() if n > 1]
+
+
+def copied_span(text: str, source: str, n: int = COPY_SPAN) -> str:
+    """The first run of n words that appears in both the letter and the source, else ""."""
+    mine = [w.lower() for w in words(text)]
+    theirs = [w.lower() for w in words(source)]
+    grams = {tuple(theirs[i:i + n]) for i in range(len(theirs) - n + 1)}
+    for i in range(len(mine) - n + 1):
+        if tuple(mine[i:i + n]) in grams:
+            return " ".join(mine[i:i + n])
+    return ""
 
 
 def _squash(s: str) -> str:
@@ -217,13 +285,22 @@ def _visible_data(resume: dict) -> dict:
 
 
 def build_prompt(company: str, role: str, jd_text: str, resume: dict, cfg: dict, samples: list[str],
-                 problems: list[str] | None = None, closing: str = "") -> str:
+                 problems: list[str] | None = None, closing: str = "", model: str = "") -> str:
     rules = "\n".join(f"- {r}" for r in cfg["style_rules"])
     banned = ", ".join(f'"{p}"' for p in cfg["banned_phrases"])
     shown = "\n\n".join(f"--- tone sample {i} ---\n{s}" for i, s in enumerate(samples, 1))
     retry = ("\nYOUR PREVIOUS ATTEMPT WAS REJECTED. Fix every one of these problems:\n"
              + "\n".join(f"- {p}" for p in problems) + "\n") if problems else ""
     L = cfg["length"]
+    cap1 = (cfg.get("first_paragraph") or {}).get("max_sentences", MAX_FIRST_PARAGRAPH_SENTENCES)
+    main = (f"""
+MAIN STYLE MODEL: a cover letter the candidate wrote himself. Match its structure, rhythm, sentence length,
+politeness and the way it opens and closes more than anything else. TONE ONLY: take NO facts, skills, employers or
+sentences from it, and never reuse {COPY_SPAN} words in a row:
+<<<
+{model.strip()}
+>>>
+""") if model.strip() else ""
     return f"""You are writing a short cover letter for a job application. Do not use any tools. Reply with ONE JSON
 object only, no prose, no code fences:
 {{"letter": "<the letter>", "jd_quotes": ["<verbatim phrase from the job description>", "..."]}}
@@ -243,12 +320,24 @@ HOW TO WRITE
 - Exactly {L['paragraphs']} short paragraphs separated by one blank line, {L['words_min']}-{L['words_max']} words in total
   (aim for about {(L['words_min'] + L['words_max']) // 2 - 10} words; under {L['words_min']} is rejected, so write the why-it-matters lines in full).
   No greeting line, no sign-off, no subject line (they are added for you). Plain text: no markdown, no lists.
-- Paragraph 1: the role, and in one or two plain sentences what you would love to work on there (from the JD).
+- Tone: confident and professional, never eager. Show interest through specific connections to the role, not through
+  enthusiasm words. Never write "love to", "eager to", "excited to", "would be thrilled", "dream", or "please reach out".
+- Paragraph 1 is AT MOST {cap1} sentences: state your intent plainly ("I'm applying for the {role} role at {company}.")
+  and connect the role to your own work in one clause or sentence (what you do now that bears on it). Do NOT summarise
+  or restate the job description to the company: they wrote it. No list of what the role involves.
+  Paragraph 1 is short (about 35 words), so paragraph 2 carries the letter: 120-140 words, in full sentences, and
+  paragraph 3 about 30 words, for a total of about 190. A letter under {L['words_min']} words is rejected: count before answering.
   Paragraph 2 (all achievements stay inside this one paragraph; never a fourth paragraph): pick ONE or TWO achievements from the resume bullets above (never three or more, and not a list), using
   the real numbers exactly as written there. For each one say what you did, then one plain sentence on why it matters
-  for THIS role, tied to a JD requirement. Paragraph 3: a simple, polite close in the tone of the writing samples, with
+  for THIS role. Do that naturally: put the fact beside the requirement it answers, in the same sentence or the next one,
+  and never announce the link. No signpost sentences such as "This matters for your role because", "It fits well
+  with", "This matches your", "This is close to". Paragraph 3: a simple, polite close in the tone of the writing samples, with
   one thank-you (the sign-off line is added for you, so do not add another). Do not write "In an interview" or
   "I would like to discuss".
+- Stay as close to the job description's own meaning as possible. Do not broaden, generalise or add scope or
+  superlatives: if it says "customers", do not write "the world's customers"; do not write global, worldwide,
+  entire, industry-leading, best, everyone, always or similar unless the job description says exactly that.
+- No two sentences may start with the same two words (not "I would ... / I would ...", not "I also ... / I also ...").
 - NEVER put words in quotation marks in the letter. Paraphrase the job description in natural wording; the exact
   phrases go only in "jd_quotes".
 - Mention the company only using facts stated in the job description. Do not invent anything about it, and do not
@@ -256,34 +345,38 @@ HOW TO WRITE
   short phrase copied EXACTLY from the job description; list at least {MIN_QUOTES} such phrases in "jd_quotes" and
   keep their key nouns in the letter, reworded around them. If you cannot quote it, do not say it.
 - Say only what the resume above states. No feelings, lessons or personality claims ("I enjoy...", "this taught me...",
-  "I like to...") and no results the resume does not state (for example "much faster").
-- Vary the wording and use "I would love to" at most {MAX_LOVE_TO} times.
+  "I like to...") and no results the resume does not state. Do not use words like faster, easier, improved, improves,
+  speed, efficiency or fewer to describe what your work achieved unless the resume above uses that very word:
+  describe what you DID (built, wired, owned), not what it led to.
+- Vary the wording. Plain, direct sentences; no exclamation marks.
 - HOW TO END (paragraph 3, one or two sentences, in your own words, not copied from this instruction): {closing or "a simple close and a thank-you"}
 - Name only technologies that appear in the resume above. Never mention salary, visa, notice period,
   relocation or personal characteristics.
 - Never use these phrases: {banned}
-{retry}
-WRITING SAMPLES (TONE ONLY: sentence length, politeness, word choice, how they close. They are outdated; take NO
-facts, skills, job titles or employers from them, and do not copy their long technology lists or openers):
+{retry}{main}
+WRITING SAMPLES (use them ONLY for sentence length and plain wording. They are outdated and more eager than the letter
+should be: take NO facts, skills, job titles or employers, no enthusiasm phrases ("love to", "excited", "eager"), and do
+not copy their long technology lists or openers):
 {shown}
 """
 
 
 def generate(company: str, role: str, jd_text: str, resume: dict, cfg: dict, samples: list[str],
              llm: Callable[[str], dict], attempts: int = 2, closing: str = "",
-             previous_closers: list[str] | None = None) -> LetterResult:
+             previous_closers: list[str] | None = None, model: str = "") -> LetterResult:
     """Ask for a letter; if the guard rejects it, ask once more with the reasons. Never returns a failing letter."""
     result = LetterResult(text=None, ok=False)
     problems: list[str] | None = None
     for _ in range(attempts):
         try:
-            reply = llm(build_prompt(company, role, jd_text, resume, cfg, samples, problems, closing))
+            reply = llm(build_prompt(company, role, jd_text, resume, cfg, samples, problems, closing, model))
             text = str(reply.get("letter", "")).strip()
             quotes = [str(q) for q in reply.get("jd_quotes") or []]
         except Exception as e:                               # Claude unavailable: no letter, never a guess
             result.attempts.append({"text": "", "problems": [f"LLM call failed: {type(e).__name__}: {e}"[:200]]})
             break
-        problems = (check_letter(text, resume, cfg, jd_text, quotes, previous_closers, f"{company} {role}") if text
+        problems = (check_letter(text, resume, cfg, jd_text, quotes, previous_closers, f"{company} {role}",
+                                 list(samples) + ([model] if model else [])) if text
                     else ["empty reply"])
         result.attempts.append({"text": text, "problems": problems, "jd_quotes": quotes})
         if not problems:
@@ -337,13 +430,14 @@ def render_pdf(resume: dict, body: str, build_dir: Path, out_pdf: Path) -> Path:
 def make_provider(job_dir: Path, company: str, role: str, jd_text: str, resume: dict, llm: Callable[[str], dict],
                   cfg: dict | None = None, samples: list[str] | None = None,
                   renderer: Callable[[dict, str, Path, Path], Path] = render_pdf,
-                  history_path: "Path | None" = None):
+                  history_path: "Path | None" = None, model: "str | None" = None):
     """field -> (value, note). value is the letter text (text box) or the PDF path (file upload), or None when
     the letter could not be produced. One letter per job: generated on first use, reused for every field.
     `history_path` remembers the closing style and closing sentence of recent letters so the next letter
     ends differently (default: output/_cover_letter_closings.json)."""
     cfg = cfg or load_config()
     samples = samples if samples is not None else load_samples()[0]
+    model = load_model() if model is None else model
     if history_path is None:
         import tailor
         history_path = tailor.OUTPUT_DIR / "_cover_letter_closings.json"
@@ -354,7 +448,7 @@ def make_provider(job_dir: Path, company: str, role: str, jd_text: str, resume: 
             history = load_history(history_path)
             closing = choose_closing(cfg, company, role, [h.get("style", "") for h in history])
             cache["res"] = generate(company, role, jd_text, resume, cfg, samples, llm, closing=closing,
-                                    previous_closers=[h.get("closing", "") for h in history])
+                                    previous_closers=[h.get("closing", "") for h in history], model=model)
             job_dir.mkdir(parents=True, exist_ok=True)
             (job_dir / "cover_letter_attempts.json").write_text(
                 json.dumps(cache["res"].attempts, indent=2, ensure_ascii=False), encoding="utf-8")

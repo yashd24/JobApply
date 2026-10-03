@@ -19,17 +19,14 @@ RESUME = persona.resume()
 CFG = C.load_config()
 JD = "We need a backend engineer to build reliable payment APIs in Python with PostgreSQL. " * 3
 
-P1 = ("I would love to join Acme as a Backend Engineer. The posting asks for someone who can build reliable payment "
-      "APIs, and that is the work I am applying for. It is a role where the services need to stay dependable "
-      "for the people who use them every day, and where small, careful changes matter more than big rewrites. "
-      "I would like to bring that care to your team.")
+P1 = ("I'm applying to join Acme as a Backend Engineer. The role asks for reliable payment APIs, and that is the work I do now at Acme Test Co, where small, careful changes matter more than big rewrites.")
 P2 = ("Your job description asks for reliable Python services. At Acme Test Co I built a payments API serving "
       "50,000+ requests per week using Python and PostgreSQL. I also cut a nightly report from 4 hours to "
       "20 minutes with Celery workers, so I know how to find the slow step and fix it without breaking "
       "anything around it.")
-P3 = ("I would love to talk more about how I could help the team. I can share more detail about either project "
+P3 = ("Above all, I'd be glad to talk more about how I could help the team. I can share more detail about either project "
       "whenever it is useful. I am also happy to answer any questions by email or on a short call, at a time "
-      "that suits you. Thank you for your time and for reading my application.")
+      "that suits you. I would also be glad to explain how the payments API was monitored and how the nightly report was split into smaller jobs. Thank you for your time and for reading my application.")
 GOOD = "\n\n".join([P1, P2, P3])
 
 
@@ -77,7 +74,7 @@ class Guard(unittest.TestCase):
     def test_sensitive_topics_placeholders_and_markdown(self):
         self.assertFails(GOOD.replace("Thank you", "My salary expectation is flexible. Thank you"), "sensitive")
         self.assertFails(GOOD.replace("Acme", "[Company]"), "placeholder")
-        self.assertFails(GOOD.replace("I would love to talk", "- I would love to talk"), "markdown")
+        self.assertFails(GOOD.replace("Above all, I'd be glad to talk", "- Above all, I'd be glad to talk"), "markdown")
         self.assertFails(GOOD.replace("helpful", "**helpful**").replace("useful", "**useful**"), "markdown")
 
 
@@ -96,12 +93,8 @@ class NewGuards(unittest.TestCase):
     def test_personal_claims_lessons_and_unstated_outcomes_are_rejected(self):
         for claim in ("This taught me to care about reliability.", "I enjoy work like this.", "I like to chase root causes.",
                       "I learned a lot there.", "It made debugging much faster.", "I am someone who ships carefully."):
-            self.assertFails(self.check(GOOD.replace("I would like to bring that care to your team.", claim)),
+            self.assertFails(self.check(GOOD.replace("where small, careful changes matter more than big rewrites.", claim)),
                              "claim about the candidate")
-
-    def test_i_would_love_to_at_most_twice(self):
-        three = GOOD.replace("I would like to bring that care", "I would love to bring that care")
-        self.assertFails(self.check(three), "'I would love to' used 3 times")
 
     def test_company_statements_must_be_anchored_by_verbatim_jd_quotes(self):
         self.assertFails(self.check(GOOD, quotes=[]), "fewer than 2")
@@ -138,7 +131,7 @@ class NewGuards(unittest.TestCase):
         self.assertEqual(C.check_letter(text, RESUME, CFG, names="Acme Software Engineer 2"), [])
 
     def test_the_interview_closing_is_banned_and_the_prompt_asks_for_a_simple_one(self):
-        bad = GOOD.replace("I would love to talk more about how I could help the team.",
+        bad = GOOD.replace("Above all, I'd be glad to talk more about how I could help the team.",
                            "In an interview, I would like to discuss how the team works.")
         self.assertFails(self.check(bad), "banned phrase")
         prompt = C.build_prompt("Acme", "Backend", JD, RESUME, CFG, ["Hi,\n\nHello."], closing=CFG["closing_styles"][0])
@@ -192,8 +185,8 @@ class Closings(unittest.TestCase):
     def test_a_bare_thank_you_is_not_what_makes_a_closing_repeat(self):
         """Regression (project44, 2026-10-02): the optional cover letter was left empty because both attempts ended
         with "Thank you ..." and earlier letters had too. Only the sentence before the thanks has to differ."""
-        self.assertEqual(C.closing_line(GOOD), "I am also happy to answer any questions by email or on a short call, at a time "
-                         "that suits you.")
+        self.assertEqual(C.closing_line(GOOD), "I would also be glad to explain how the payments API was monitored and how the "
+                         "nightly report was split into smaller jobs.")
         self.assertEqual(C.closing_line("One.\n\nTwo here. Thank you."), "Two here.")
         self.assertEqual(C.closing_line("One.\n\nThank you for reading my application."),
                          "Thank you for reading my application.")                       # only thanks: falls back
