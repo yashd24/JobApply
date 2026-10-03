@@ -144,8 +144,9 @@ def _folder_of(row) -> "Path | None":
 
 
 def make_processor(tr: "T.Tracker", cfg: dict, *, apply_run=None, manual_prepare=None, profile_loader=None,
-                   resume_loader=None):
-    """A function row -> what happened (a tracker status), doing the right thing for the posting's route."""
+                   resume_loader=None, unattended: bool = False, greenhouse_mode: "str | None" = None):
+    """A function row -> what happened (a tracker status), doing the right thing for the posting's route. Unattended
+    (python run.py): Greenhouse uses `greenhouse_mode` (auto) and never waits for a person."""
     apply_run = apply_run or apply.run
     manual_prepare = manual_prepare or prepare_manual
     profile_loader = profile_loader or (lambda: P.load_profile(apply.PROFILE_FILE))
@@ -155,8 +156,9 @@ def make_processor(tr: "T.Tracker", cfg: dict, *, apply_run=None, manual_prepare
         route, url = row["route"] or "manual", row["canonical_url"]
         try:
             if route == "greenhouse":
-                mode = cfgmod.requested_mode(cfg, "greenhouse")
-                apply_run(url, mode=mode, allow_submit=url, resume_from=_folder_of(row))      # the approval is for THIS url
+                mode = greenhouse_mode or cfgmod.requested_mode(cfg, "greenhouse")
+                kw = {"unattended": True} if unattended else {}
+                apply_run(url, mode=mode, allow_submit=url, resume_from=_folder_of(row), **kw)   # approved for THIS url
             elif route == "lever":
                 apply_run(url, mode="prepare", resume_from=_folder_of(row), prepare_interactive=False)
             else:

@@ -152,7 +152,7 @@ class Runs(unittest.TestCase):
         self.pauses = []          # the messages the user was shown while the run was paused
 
     def go(self, path="/form", *, mode=None, allow="auto-url", user=None, dry_run=False, llm=None, headless_flag=False,
-           interactive=None, poll_hook=None):
+           interactive=None, poll_hook=None, unattended=False):
         """Run apply.run against the local employer. `user(session)` is what the human does during a pause."""
         import apply
         import tailor
@@ -197,10 +197,13 @@ class Runs(unittest.TestCase):
                     mock.patch.object(ATS, "after_upload_ms", 100):
                 out = apply.run(self.base + path, mode=mode, dry_run=dry_run, resume_pdf=pdf,
                                 allow_submit=canonical if allow == "auto-url" else allow, session_factory=factory,
-                                headless=headless_flag)
+                                headless=headless_flag, unattended=unattended)
             job_dir = tmp / "output" / "dryrun_Acme_Backend_Engineer"
             result = json.loads((job_dir / "apply_result.json").read_text(encoding="utf-8"))
             shots = sorted(p.name for p in (job_dir / "screenshots").iterdir())
+            self.last_files = sorted(p.name for p in job_dir.iterdir() if p.is_file())
+            sheet = job_dir / "prepare_sheet.txt"
+            self.last_sheet = sheet.read_text(encoding="utf-8") if sheet.exists() else ""
         return out, result, shots
 
     posts = property(lambda self: [m for m, _ in Server.seen if m == "POST"])
@@ -369,6 +372,67 @@ class Runs(unittest.TestCase):
         self.assertEqual(self.posts, [])
 
 
+@unittest.skipUnless(HAVE_CHROMIUM, "Playwright Chromium not installed")
+class UnattendedAuto(Runs):
+    """python run.py: nobody is at the keyboard. Greenhouse auto submits only when every required field is filled and
+    nothing is flagged; otherwise the materials are prepared and the job is Needs review with the reason. Never a wait."""
+
+    def test_everything_filled_is_submitted_without_a_pause(self):
+        out, result, _ = self.go(mode="auto", unattended=True)
+        self.assertEqual((result["status"], self.posts, self.pauses), ("submitted", ["POST"], []))
+
+    def test_a_flagged_required_field_means_needs_review_with_the_materials_and_no_submit(self):
+        out, result, shots = self.go("/form-needs-you", mode="auto", unattended=True)
+        self.assertEqual(result["status"], "needs_review")
+        self.assertEqual((self.posts, self.pauses), ([], []))                          # no submit, nobody waited for
+        self.assertIn("not submitted", result["reason"])
+        self.assertIn("Why do you want to work here", result["reason"])
+        self.assertIn("prepare_sheet.html", self.last_files)
+        self.assertIn("NEEDS YOUR REVIEW", self.last_sheet)
+        self.assertIn("Why do you want to work here", self.last_sheet)
+        self.assertTrue(any(x.startswith("0") and x.endswith("needs_review.png") for x in shots), shots)
+
+    def test_a_visible_captcha_means_needs_review_and_is_never_bypassed(self):
+        out, result, _ = self.go("/form-captcha", mode="auto", unattended=True)
+        self.assertEqual(result["status"], "needs_review")
+        self.assertEqual((self.posts, self.pauses), ([], []))
+        self.assertIn("CAPTCHA", result["reason"])
+
+    def test_an_unclear_result_after_submit_means_needs_review_not_submitted(self):
+        Server.submit_response = "<html><body><p>Processing...</p></body></html>"
+        out, result, _ = self.go(mode="auto", unattended=True)
+        self.assertEqual((result["status"], self.posts, self.pauses), ("needs_review", ["POST"], []))
+        self.assertIn("nothing says the application was received", result["reason"])
+
+    def test_a_security_code_step_after_submit_is_recorded_not_waited_for(self):
+        Server.submit_response = "<html><body><p>Enter the 8-character code sent to your email to finish.</p></body></html>"
+        out, result, _ = self.go(mode="auto", unattended=True)
+        self.assertEqual((result["status"], self.posts, self.pauses), ("needs_review", ["POST"], []))
+        self.assertIn("security code", result["reason"])
+        self.assertIn("nothing was bypassed", result["reason"])
+
+    def test_validation_errors_after_submit_are_failed_with_the_errors(self):
+        Server.submit_response = ("<html><body><form><label>Email</label><input aria-invalid='true'>"
+                                  "<p role='alert'>Email is required</p></form></body></html>")
+        out, result, _ = self.go(mode="auto", unattended=True)
+        self.assertEqual(result["status"], "failed")
+        self.assertIn("Email is required", " ".join(result["validation_errors"]))
+
+    def test_unattended_assist_never_waits_for_a_person(self):
+        out, result, _ = self.go(mode="assist", unattended=True)
+        self.assertEqual((result["status"], self.posts, self.pauses), ("needs_review", [], []))
+        self.assertIn("nobody is at the keyboard", result["reason"])
+
+    def test_the_attended_behaviour_is_unchanged(self):
+        out, result, _ = self.go("/form-needs-you", mode="auto", user=lambda s: s.page.click("button[type=submit]"))
+        self.assertEqual(len(self.pauses), 1)                                           # it still hands over to a person
+        self.assertEqual(result["status"], "submitted")
+
+
+for _name in [n for n in dir(Runs) if n.startswith("test_") and n not in UnattendedAuto.__dict__]:
+    setattr(UnattendedAuto, _name, None)             # only the harness is inherited, not the attended tests again
+
+
 class WaitForResult(unittest.TestCase):
     """The post-submit loop, with a fake adapter and session (no browser)."""
 
@@ -421,6 +485,13 @@ class WaitForResult(unittest.TestCase):
         import apply
         s = self.Session()
         self.assertIsNone(apply.wait_for_result(s, self.Adapter([], []), timeout_s=0.05, poll_s=0.01))
+        self.assertEqual(s.pauses, [])
+
+    def test_unattended_a_visible_challenge_is_not_waited_for_and_the_answer_is_unclear(self):
+        import apply
+        s = self.Session()
+        verdict = apply.wait_for_result(s, self.Adapter(["captcha"], [True]), timeout_s=5, poll_s=0.01, unattended=True)
+        self.assertIsNone(verdict)
         self.assertEqual(s.pauses, [])
 
     def test_validation_errors_end_the_wait_as_false(self):

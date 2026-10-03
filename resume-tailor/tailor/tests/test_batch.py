@@ -62,7 +62,7 @@ class Base(unittest.TestCase):
 
 
 class Approval(Base):
-    def test_every_approved_route_waits_for_the_batch_runner_and_nothing_reaches_the_sheet_yet(self):
+    def test_every_approved_route_waits_for_the_batch_runner_and_an_unscored_found_posting_stays_out_of_the_sheet(self):
         ids = [self.add(GH, "G", "greenhouse"), self.add(LV, "L", "lever"), self.add(LINKEDIN, "M", "manual", source="linkedin")]
         self.assertEqual([self.tr.job(u)["status"] for u in (GH, LV, LINKEDIN)], ["approved"] * 3)
         reasons = [self.tr.job(u)["reason"] for u in (GH, LV, LINKEDIN)]
@@ -73,9 +73,12 @@ class Approval(Base):
         self.assertEqual(out["ignored"], ids)                                    # already decided
         from jobbot import sheets
         from test_sheets import FakeSheet
+        self.add("https://job-boards.greenhouse.io/acme/jobs/777", "Unscored", "greenhouse", approve=False)
         sheet = FakeSheet()
         sheets.sync(self.tr, sheet)
-        self.assertEqual(sheet.row(2), [""] * 18)                                # approved jobs are not in the main tab
+        shown = [sheet.row(n)[3] for n in range(2, 8) if sheet.row(n)[3]]
+        self.assertEqual(sorted(shown), ["G", "L", "M"])                         # approved jobs are in the sheet ...
+        self.assertNotIn("Unscored", shown)                                      # ... a Found one with no score is not
 
     def test_skip_still_works_and_no_manual_status_comes_from_approval(self):
         jid = self.add(LINKEDIN, "M", "manual", approve=False)

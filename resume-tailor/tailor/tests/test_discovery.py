@@ -13,6 +13,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 sys.path.insert(0, str(ROOT / "tests"))
 
+import persona  # noqa: E402
 import tailor  # noqa: E402
 from jobbot import config as cfgmod  # noqa: E402
 from jobbot import discovery as D  # noqa: E402
@@ -59,12 +60,13 @@ def fetch_none(url):
 class Settings(unittest.TestCase):
     def test_the_example_config_is_valid_and_has_the_agreed_values(self):
         s = D.load_settings(cfgmod.load_config(ROOT / "config.example.yaml"))
-        self.assertEqual(s.terms, ["backend engineer", "software development engineer", "python developer",
-                                   "software engineer"])
+        self.assertEqual(s.terms, ["Python Developer", "Django Developer", "Backend Developer", "Backend Engineer",
+                                   "Software Engineer", "Software Developer", "SDE 1", "Associate Software Engineer",
+                                   "Full Stack Developer"])
         self.assertEqual([l.name for l in s.locations], ["Bengaluru", "Remote India"])
         self.assertEqual([l.remote for l in s.locations], [False, True])
         self.assertEqual((s.sites, s.max_age_days, s.results_per_search, s.max_min_experience_years),
-                         (["indeed", "naukri", "linkedin"], 30, 30, 2))
+                         (["indeed", "naukri", "linkedin"], 30, 30, 3))
         self.assertEqual(s.country, "india")
 
     def test_problems_are_named(self):
@@ -99,9 +101,11 @@ class Experience(unittest.TestCase):
         a = D.years_asked("5+ years of backend experience.\nPlus 1 year of experience with Kubernetes.")
         self.assertEqual(a.min_years, 5)
 
-    def test_naukris_own_field_comes_first(self):
-        self.assertEqual(D.years_asked("10+ years of experience", "0-2 Yrs").label, "0-2 yrs")
+    def test_naukris_own_field_and_the_description_are_both_read_and_the_highest_minimum_wins(self):
+        self.assertEqual(D.years_asked("Nothing about years here.", "0-2 Yrs").label, "0-2 yrs")
         self.assertEqual(D.years_asked("x", "3-5 Yrs").min_years, 3)
+        a = D.years_asked("10+ years of experience", "0-2 Yrs")
+        self.assertEqual((a.min_years, a.mentions), (10, ["0-2 yrs", "10+ yrs"]))
 
 
 class Filters(unittest.TestCase):
@@ -204,11 +208,12 @@ class FirstRealRunFindings(unittest.TestCase):
         t.close()
 
     def test_titles_the_first_run_let_through_are_now_excluded(self):
-        for title in ("Front End Developer", "Frontend Engineer", "WordPress Developer", ".NET Developer", "React Native Developer",
-                      "Next.js Developer(Unpaid)", "Mobile App Developer", "HTML5 Mobile Game Developer", "Dev Ops Engineer",
-                      "DevOps Engineer", "Full Stack Web Development Training"):
+        for title in ("Front End Developer", "Frontend Engineer", "React Native Developer", "Mobile App Developer",
+                      "HTML5 Mobile Game Developer", "Dev Ops Engineer", "DevOps Engineer"):
             self.assertFalse(D.title_ok(title, self.S)[0], title)
-        for title in ("Backend Engineer", "Python Backend Developer", "Software Engineer - Java", "SDE 2", "Back End Developer"):
+        # backend in ANY language is wanted, so these are no longer excluded by title (the relevance score judges them)
+        for title in ("Backend Engineer", "Python Backend Developer", "Software Engineer - Java", "SDE 2", "Back End Developer",
+                      ".NET Developer", "WordPress Developer", "Backend Developer - PHP"):
             self.assertTrue(D.title_ok(title, self.S)[0], title)
 
     def test_company_tokens_come_from_the_name_not_the_domain(self):
@@ -298,6 +303,202 @@ class RemoteMustBeStated(unittest.TestCase):
         t.close()
 
 
+class SelectionRules(unittest.TestCase):
+    """The selection rules asked for on 2026-10-03: every experience mention, title rules, description rules, editable lists."""
+    S = D.load_settings(cfg(max_min_experience_years=3))
+
+    def test_every_experience_mention_is_read_and_any_minimum_above_the_limit_drops_it(self):
+        a = D.years_asked("We need 3 years of experience in Python. Also 5+ years of backend experience required.")
+        self.assertEqual((a.min_years, a.mentions), (5, ["3 yrs", "5+ yrs"]))
+        a = D.years_asked("0-2 years of experience with Django.\nPlus 4 years of experience with Kubernetes.")
+        self.assertEqual(a.min_years, 4)                                                 # a later, harder requirement counts
+        a = D.years_asked("We have 10 years of experience in fintech. You bring 2 years of experience.")
+        self.assertEqual((a.min_years, a.mentions), (2, ["2 yrs"]))                      # the company talking about itself
+        a = D.years_asked("Requirements: 2-3 years in Python and 1 year of AWS experience.")
+        self.assertEqual(a.min_years, 2)
+
+    def test_three_years_is_kept_four_is_dropped(self):
+        t = T.Tracker(Path(tempfile.mkdtemp()) / "t.sqlite3")
+        rows = [row("Backend Engineer", "Three Co", desc="3 years of experience in Python."),
+                row("Backend Engineer", "Four Co", desc="Python. 4 years of experience required."),
+                row("Backend Engineer", "Mixed Co", desc="1-3 years of experience. 5+ years of backend experience preferred."),
+                row("Backend Engineer", "Soft Co", desc="1-3 years of experience.")]
+        rep = D.discover(D.load_settings(cfg(max_min_experience_years=3)), t, scrape_fn=FakeJobSpy(rows), fetch=fetch_none,
+                         sleep=lambda x: None, today=TODAY, log=lambda *a: None)
+        self.assertEqual(sorted(r["company"] for r in t.found()), ["Soft Co", "Three Co"])
+        self.assertIn("every mention: 1-3 yrs, 5+ yrs", " ".join(i["why"] for i in rep.dropped["experience"]))
+        t.close()
+
+    def test_the_titles_named_in_the_request_are_dropped(self):
+        for t in ("Senior Backend Engineer", "Sr. Python Developer", "Lead Software Engineer", "Staff Software Engineer",
+                  "Principal Developer", "Software Architect", "Engineering Manager", "Director of Engineering", "Head of Backend",
+                  "Backend Intern", "Software Trainee", "QA Automation Developer", "Software Test Engineer",
+                  "Data Scientist", "Data Analyst Developer", "Frontend Developer", "Mobile Developer", "DevOps Developer",
+                  "Embedded Software Engineer", "Firmware Developer", "Software Engineer III", "SDE 3"):
+            self.assertFalse(D.title_ok(t, self.S)[0], t)
+
+    def test_the_titles_that_are_wanted_pass(self):
+        for t in ("Python Developer", "Django Developer", "Backend Developer", "Backend Engineer", "Software Engineer",
+                  "Software Developer", "SDE 1", "SDE I", "Associate Software Engineer", "Full Stack Developer",
+                  "Software Engineer - Backend", "Java Backend Developer", "Golang Developer", "Node.js Developer"):
+            self.assertTrue(D.title_ok(t, self.S)[0], t)
+
+    def test_embedded_dominated_descriptions_are_dropped_but_a_passing_mention_is_not(self):
+        embedded = "Write firmware for microcontrollers over I2C and SPI using embedded C on an RTOS."
+        ok, why = D.description_ok("Software Engineer", embedded, self.S)
+        self.assertFalse(ok)
+        self.assertIn("embedded/hardware role", why)
+        self.assertTrue(D.description_ok("Backend Engineer", "Build Django APIs. Familiarity with firmware is a plus.", self.S)[0])
+        for term in ("I2C", "SPI", "UART", "firmware", "RTOS", "microcontroller", "embedded C", "BSP", "FPGA", "Verilog"):
+            ok, _ = D.description_ok("Engineer", f"Work with {term} and with a Linux kernel driver.", self.S)
+            self.assertFalse(ok, term)                                                   # each listed term counts
+
+    def test_frontend_only_is_dropped_but_backend_heavy_full_stack_is_kept(self):
+        self.assertFalse(D.description_ok("Web Developer", "React, TypeScript, CSS and HTML work all day.", self.S)[0])
+        self.assertIn("frontend-only", D.description_ok("Web Developer", "React and CSS work.", self.S)[1])
+        self.assertTrue(D.description_ok("Full Stack Developer", "React UI plus Django REST APIs and PostgreSQL.", self.S)[0])
+        self.assertTrue(D.description_ok("Web Developer", "React work.", self.S)[0])               # one term is not enough
+        self.assertTrue(D.description_ok("Software Engineer", "", self.S)[0])                     # nothing to judge
+
+    def test_the_term_lists_are_editable_in_config(self):
+        mine = D.load_settings(cfg(title_exclude_words=["wizard"], embedded_terms=["widgetry"], embedded_min_terms=1,
+                                   frontend_terms=["jsx", "tsx"], backend_terms=["wiring"]))
+        self.assertFalse(D.title_ok("Backend Wizard", mine)[0])
+        self.assertTrue(D.title_ok("Senior Backend Engineer", mine)[0])                  # not on THIS list any more
+        self.assertFalse(D.description_ok("Engineer", "Daily widgetry.", mine)[0])
+        self.assertFalse(D.description_ok("Engineer", "jsx and tsx all day.", mine)[0])
+        self.assertTrue(D.description_ok("Engineer", "jsx and tsx and wiring.", mine)[0])
+        with self.assertRaises(D.DiscoveryError):
+            D.load_settings(cfg(embedded_terms="firmware"))
+
+    def test_the_example_config_carries_all_the_lists(self):
+        s = D.load_settings(cfgmod.load_config(ROOT / "config.example.yaml"))
+        self.assertIn("senior", s.title_exclude_words)
+        self.assertIn("i2c", s.embedded_terms)
+        self.assertIn("react", s.frontend_terms)
+        self.assertIn("django", s.backend_terms)
+        self.assertEqual(s.embedded_min_terms, 2)
+
+    def test_a_description_dropped_by_the_rules_is_reported_with_its_reason(self):
+        t = T.Tracker(Path(tempfile.mkdtemp()) / "t.sqlite3")
+        rep = D.discover(D.load_settings(cfg()), t, scrape_fn=FakeJobSpy([
+            row("Software Engineer", "Chip Co", desc="Firmware on microcontrollers over I2C. 1 year of experience."),
+            row("Web Developer", "Pixel Co", desc="React and CSS. 1 year of experience."),
+            row("Backend Engineer", "Good Co", desc="Django APIs. 1 year of experience.")]),
+            fetch=fetch_none, sleep=lambda x: None, today=TODAY, log=lambda *a: None)
+        self.assertEqual({k: len(v) for k, v in rep.dropped.items()}, {"description": 2})
+        self.assertEqual([r["company"] for r in t.found()], ["Good Co"])
+        t.close()
+
+
+class RealPostingFormats(unittest.TestCase):
+    """Formats from the first scored run (2026-10-03) that the experience rule missed: it let "asks 8-10 years" through."""
+
+    def test_list_fragments_separated_by_semicolons_or_lines_are_read(self):
+        a = D.years_asked("Required skills: Python;\n5+ years;\n4+ years\n8?10 years overall software development;")
+        self.assertEqual((a.min_years, a.mentions), (8, ["5+ yrs", "4+ yrs", "8-10 yrs"]))      # "8?10" is a mangled dash
+
+    def test_a_label_and_its_value_on_separate_lines(self):
+        a = D.years_asked("Role: Python Engineer\nExperience Range :\n5 to 10 Years\nLocation: Bengaluru")
+        self.assertEqual((a.min_years, a.label), (5, "5-10 yrs"))
+        a = D.years_asked("Experience in developing APIs is mandatory (more than 2 years). 5 to 10 Years overall.")
+        self.assertEqual(a.min_years, 5)
+
+    def test_clear_forms_count_anywhere_but_vague_ones_do_not(self):
+        self.assertEqual(D.years_asked("Our revenue grew over 5 years. You bring 2 years of experience.").min_years, 2)
+        self.assertEqual(D.years_asked("The contract runs 2 years. Salary reviewed yearly.").min_years, None)
+        self.assertEqual(D.years_asked("We are a company with 10+ years in business. Great culture.").min_years, None)
+        self.assertEqual(D.years_asked("Team lunch every 2 years.").min_years, None)
+        self.assertEqual(D.years_asked("Perks\n3+ years\n").min_years, 3)               # a bare "3+ years" line is a requirement
+
+    def test_the_two_postings_the_first_run_wrongly_kept_are_now_dropped(self):
+        t = T.Tracker(Path(tempfile.mkdtemp()) / "t.sqlite3")
+        rows = [row("Python Fullstack Developer", "atsMantra", desc="Skills:\n5+ years;\n4+ years\n8?10 years overall software development;"),
+                row("Python Engineer", "Tata Co", desc="Experience Range :\n5 to 10 Years\nExperience in API is mandatory (more than 2 years)")]
+        rep = D.discover(D.load_settings(cfg(max_min_experience_years=3)), t, scrape_fn=FakeJobSpy(rows), fetch=fetch_none,
+                         sleep=lambda x: None, today=TODAY, log=lambda *a: None)
+        self.assertEqual(t.found(), [])
+        self.assertEqual(len(rep.dropped["experience"]), 2)
+        t.close()
+
+
+class Recheck(unittest.TestCase):
+    """Postings that are only Found are re-judged by today's rules from the stored text: no scrape, no Claude."""
+
+    def setUp(self):
+        self.t = T.Tracker(Path(tempfile.mkdtemp()) / "t.sqlite3")
+        self.s = D.load_settings(cfg(max_min_experience_years=3))
+
+    def tearDown(self):
+        self.t.close()
+
+    def add(self, n, title, desc, exp="not stated"):
+        url = f"https://www.linkedin.com/jobs/view/{9000000 + n}"
+        self.t.add_found({"canonical_url": url, "company": f"Co{n}", "role": title, "route": "manual", "source": "linkedin",
+                          "source_url": url, "experience_asked": exp, "location": "Bengaluru", "description": desc})
+        jid = self.t.job(url)["id"]
+        return jid
+
+    def test_failing_postings_are_forgotten_and_passing_ones_keep_their_scores(self):
+        good = self.add(1, "Backend Engineer", "Django APIs. 1-3 years of experience.")
+        self.t.set_relevance(good, 8, "fits")
+        bad_exp = self.add(2, "Backend Engineer", "Skills:\n5+ years;")
+        bad_title = self.add(3, "Senior Backend Engineer", "Django.")
+        bad_desc = self.add(4, "Software Engineer", "Firmware over I2C and SPI on a microcontroller.")
+        gone = D.recheck_found(self.t, self.s, log=lambda *a: None)
+        self.assertEqual(sorted((g["id"], g["kind"]) for g in gone),
+                         sorted([(bad_exp, "experience"), (bad_title, "title"), (bad_desc, "description")]))
+        left = self.t.found()
+        self.assertEqual([(r["id"], r["relevance"]) for r in left], [(good, 8)])
+
+    def test_only_found_postings_are_ever_forgotten(self):
+        approved = self.add(1, "Backend Engineer", "Skills:\n9+ years;")
+        self.t.decide([approved], approve=True)
+        self.assertEqual(D.recheck_found(self.t, self.s, log=lambda *a: None), [])
+        self.assertEqual(self.t.job("https://www.linkedin.com/jobs/view/9000001")["status"], "approved")
+
+    def test_a_changed_limit_changes_the_verdict(self):
+        self.add(1, "Backend Engineer", "Needs 4 years of experience.")
+        self.assertEqual(len(D.recheck_found(self.t, D.load_settings(cfg(max_min_experience_years=3)), log=lambda *a: None)), 1)
+        self.add(2, "Backend Engineer", "Needs 4 years of experience.")
+        self.assertEqual(D.recheck_found(self.t, D.load_settings(cfg(max_min_experience_years=5)), log=lambda *a: None), [])
+
+    def test_the_stored_experience_label_still_counts(self):
+        self.add(1, "Backend Engineer", "Great team.", exp="5-8 yrs")                   # e.g. Naukri's own field, no mention in text
+        self.assertEqual(len(D.recheck_found(self.t, self.s, log=lambda *a: None)), 1)
+
+    def test_a_run_rechecks_and_counts_what_the_new_rules_removed(self):
+        import run
+        self.add(1, "Backend Engineer", "Skills:\n5+ years;")
+        keep = self.add(2, "Backend Engineer", "Django APIs. 1-2 years of experience.")
+        self.t.set_relevance(keep, 9, "fits")
+        s = run.run_all({"discovery": cfg()["discovery"], "selection": {}, "batch": {"delay_between_jobs_s": [0, 0], "daily_cap": 3}},
+                        self.t, dry_run=True, skip_discovery=True, llm=lambda p: {"scores": []},
+                        profile_loader=persona.profile, resume_loader=persona.resume, sync_fn=lambda tr: "ok",
+                        log=lambda *a: None)
+        self.assertEqual(s["dropped"], {"rechecked: experience": 1})
+        self.assertEqual([r["id"] for r in self.t.found()], [keep])
+
+    def test_the_cli_flag(self):
+        import discover
+        self.add(1, "Backend Engineer", "Skills:\n5+ years;")
+        out = []
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp = Path(tmp)
+            (tmp / "config.yaml").write_text("discovery:\n  search_terms: [x]\n  locations: [Bengaluru]\n  sites: [indeed]\n"
+                                            "  max_min_experience_years: 3\n", encoding="utf-8")
+            self.t.close()
+            with mock.patch.object(discover, "CONFIG_FILE", tmp / "config.yaml"), mock.patch.object(tailor, "OUTPUT_DIR", tmp), \
+                    mock.patch.object(discover, "_tracker_file", lambda: self.t.path), \
+                    mock.patch.object(sys, "argv", ["discover.py", "--recheck"]), \
+                    mock.patch("builtins.print", lambda *a, **k: out.append(" ".join(map(str, a)))):
+                code = discover.main()
+            self.t = T.Tracker(self.t.path)
+        self.assertEqual(code, 0)
+        self.assertIn("1 no longer pass", "\n".join(out))
+        self.assertEqual(self.t.found(), [])
+
+
 class Discover(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
@@ -332,9 +533,9 @@ class Discover(unittest.TestCase):
         kept = sorted(r["company"] for r in self.t.found())
         self.assertEqual(kept, ["Fresher Co", "Keep Co", "Remote Co"])
         self.assertEqual({k: len(v) for k, v in rep.dropped.items()},
-                         {"experience": 2, "location": 2, "too old": 1, "title": 1})
+                         {"title": 2, "experience": 1, "location": 2, "too old": 1})
         why = " ".join(i["why"] for v in rep.dropped.values() for i in v)
-        for needle in ("asks 5+ yrs", "senior-level title", "'Pune, MH, India'", "posted 2026-08-21", "excluded"):
+        for needle in ("asks 5+ yrs", "excluded ('Senior')", "excluded ('Intern')", "'Pune, MH, India'", "posted 2026-08-21"):
             self.assertIn(needle, why)
 
     def test_the_experience_limit_comes_from_the_config(self):
@@ -349,7 +550,7 @@ class Discover(unittest.TestCase):
         self.assertEqual(self.t.found(), [])
 
     def test_naukris_experience_field_is_used(self):
-        rows = [row("Backend Engineer", "Naukri Ok", site="naukri", experience_range="0-2 Yrs"),
+        rows = [row("Backend Engineer", "Naukri Ok", site="naukri", experience_range="0-2 Yrs", desc="A good team."),
                 row("Backend Engineer", "Naukri No", site="naukri", experience_range="5-8 Yrs", desc="")]
         self.go(rows)
         self.assertEqual([(r["company"], r["experience_asked"]) for r in self.t.found()], [("Naukri Ok", "0-2 yrs")])
@@ -480,16 +681,17 @@ class TrackerFlow(unittest.TestCase):
         r = self.t.job(GH)
         self.assertEqual((r["status"], r["route"], r["source"]), ("submitted", "greenhouse", "indeed"))   # discovery data kept
 
-    def test_the_sheet_gets_manual_postings_but_not_found_approved_or_skipped_ones(self):
+    def test_the_sheet_gets_manual_and_approved_postings_but_not_skipped_ones_and_unscored_found_ones(self):
         self.t.decide([self.ids["C"], self.ids["A"]], approve=True)
         self.t.set_state(self.ids["C"], "manual", "could not be prepared: apply by hand from the link")
         self.t.decide([self.ids["B"]], approve=False)
         from test_sheets import FakeSheet
         sheet = FakeSheet()
         sheets.sync(self.t, sheet)
-        self.assertEqual(sheet.row(2)[1], "Manual")
-        self.assertEqual(sheet.row(2)[6], "https://in.indeed.com/viewjob?jk=1")
-        self.assertEqual(sheet.row(3), [""] * 18)                                            # nothing else was written
+        self.assertEqual((sheet.row(2)[1], sheet.row(2)[3]), ("Approved", "A"))             # approved: in the sheet
+        self.assertEqual(sheet.row(3)[1], "Manual")
+        self.assertEqual(sheet.row(3)[6], "https://in.indeed.com/viewjob?jk=1")
+        self.assertEqual(sheet.row(4), [""] * 20)                                            # the skipped one is not there
 
     def test_an_old_database_is_migrated_in_place(self):
         old = Path(self.tmp.name) / "old.sqlite3"
@@ -546,10 +748,16 @@ class Shortlist(unittest.TestCase):
         self.assertEqual(D.route_label({"route": "greenhouse"}, {"platforms": {"greenhouse": {"mode": "auto"}}}),
                          "Greenhouse -> auto")
 
-    def test_html_is_escaped(self):
-        page = D.shortlist_html(self.rows())
-        self.assertIn("Acme &lt;b&gt;", page)
-        self.assertNotIn("Acme <b>", page)
+    def test_the_shortlist_is_data_not_a_page(self):
+        self.assertFalse(hasattr(D, "shortlist_html"))
+        rows = self.rows()
+        recs = D.shortlist_records(rows, {"platforms": {"greenhouse": {"mode": "assist"}}})
+        self.assertEqual(len(recs), 2)
+        first = next(r for r in recs if r["company"] == "Acme <b>")
+        self.assertEqual(set(first), {"id", "title", "company", "location", "experience_asked", "route", "link",
+                                      "relevance_score", "reason"})
+        self.assertEqual((first["route"], first["link"], first["title"]), ("Greenhouse -> assist", GH, "Backend Engineer"))
+        json.dumps(recs)                                                                     # serialisable as is
 
     def test_ids_are_parsed_strictly(self):
         self.assertEqual(D.parse_ids("3, 7 12", [1, 2]), [3, 7, 12])
@@ -594,7 +802,8 @@ class Cli(unittest.TestCase):
         self.assertNotIn("Far Co |", out)
         self.assertEqual(list(state.values()), [("Cli Co", "found")])
         self.assertTrue(any(f.startswith("2026") or f.endswith(".json") for f in files))
-        self.assertIn("shortlist.html", files)
+        self.assertIn("shortlist.json", files)
+        self.assertNotIn("shortlist.html", files)
 
     def test_dry_run_saves_nothing(self):
         code, out, state, files, fake = self.run_cli(["--dry-run"], [row("Backend Engineer", "Cli Co")])

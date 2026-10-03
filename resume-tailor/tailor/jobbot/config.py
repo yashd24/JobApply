@@ -19,7 +19,7 @@ class ConfigError(Exception):
 
 def load_config(path: Path | None = None) -> dict:
     path = path or CONFIG_FILE
-    cfg = {"default_mode": DEFAULTS["default_mode"], "sheets": {}, "discovery": {}, "batch": {},
+    cfg = {"default_mode": DEFAULTS["default_mode"], "sheets": {}, "discovery": {}, "batch": {}, "selection": {}, "run": {},
            "platforms": {k: dict(v) for k, v in DEFAULTS["platforms"].items()}}
     if path.exists():
         raw = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
@@ -28,6 +28,11 @@ def load_config(path: Path | None = None) -> dict:
         cfg["default_mode"] = raw.get("default_mode", cfg["default_mode"])
         cfg["discovery"] = raw.get("discovery") or {}
         cfg["batch"] = raw.get("batch") or {}
+        cfg["selection"] = raw.get("selection") or {}
+        cfg["run"] = raw.get("run") or {}
+        for section in ("selection", "run", "discovery"):
+            if not isinstance(cfg[section], dict):
+                raise ConfigError(f"{section} must be a mapping")
         if not isinstance(cfg["batch"], dict):
             raise ConfigError("batch must be a mapping (delay_between_jobs_s, daily_cap)")
         cfg["sheets"] = raw.get("sheets") or {}

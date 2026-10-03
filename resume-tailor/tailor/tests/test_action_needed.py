@@ -298,8 +298,8 @@ class RealSheetRequests(unittest.TestCase):
         self.assertEqual(values.get.call_args.kwargs["range"], f"'{TAB}'!A1:I1000")
         g.clear("A5:I1000", tab=TAB)
         self.assertEqual(values.clear.call_args.kwargs["range"], f"'{TAB}'!A5:I1000")
-        g.read("A1:R")
-        self.assertEqual(values.get.call_args.kwargs["range"], "'Applications'!A1:R")
+        g.read("A1:T")
+        self.assertEqual(values.get.call_args.kwargs["range"], "'Applications'!A1:T")
 
 
 class Cli(Base):

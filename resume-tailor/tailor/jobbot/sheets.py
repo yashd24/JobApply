@@ -24,7 +24,8 @@ from pathlib import Path
 from jobbot import tracker as T
 
 AUTO_COLUMNS = ["Date", "Status", "Mode", "Company", "Role", "Location", "URL", "Score", "Flagged fields",
-                "Resume file used", "Gaps", "Notes", "Reason", "Job folder"]
+                "Resume file used", "Gaps", "Notes", "Reason", "Job folder", "Relevance", "Relevance reason"]
+SHOW_FOUND_FROM = 5          # a Found posting appears in the main tab only if its relevance score is at least this
 MANUAL_COLUMNS = ["Response", "Interview stage", "Follow-up date", "My notes"]
 HEADER = AUTO_COLUMNS + MANUAL_COLUMNS
 URL_INDEX = AUTO_COLUMNS.index("URL")
@@ -96,13 +97,14 @@ def _list_text(job, field) -> str:
 
 
 def job_row(job) -> list:
-    """The fourteen bot-owned cells for one tracked posting (a sqlite3.Row or dict)."""
+    """The sixteen bot-owned cells for one tracked posting (a sqlite3.Row or dict)."""
     pdf = job["resume_pdf"]
     return [(job["submitted_at"] or job["created_at"] or "")[:10], T.label(job["status"]),
             "manual" if job["submitted_by"] == "manual" else (job["mode"] or ""), job["company"] or "",
             job["role"] or "", job["location"] or "", job["canonical_url"], "" if job["score"] is None else job["score"],
             _list_text(job, "flagged_fields"), f"{Path(pdf).parent.name}/{Path(pdf).name}" if pdf else "",
-            _list_text(job, "gaps"), job["notes"] or "", job["reason"] or "", job["job_folder"] or ""]
+            _list_text(job, "gaps"), job["notes"] or "", job["reason"] or "", job["job_folder"] or "",
+            "" if job["relevance"] is None else job["relevance"], job["relevance_reason"] or ""]
 
 
 def action_row(job) -> list:
@@ -168,7 +170,15 @@ def write_action_tab(tracker: "T.Tracker", client, tab: str = ACTION_TAB) -> int
     return len(rows)
 
 
-def sync(tracker: "T.Tracker", client, urls: "list[str] | None" = None, action_tab: "str | None" = ACTION_TAB) -> SyncResult:
+def show_found_from(cfg: "dict | None") -> int:
+    try:
+        return int(((cfg or {}).get("sheets") or {}).get("show_found_from", SHOW_FOUND_FROM))
+    except (TypeError, ValueError):
+        return SHOW_FOUND_FROM
+
+
+def sync(tracker: "T.Tracker", client, urls: "list[str] | None" = None, action_tab: "str | None" = ACTION_TAB,
+         found_from: int = SHOW_FOUND_FROM) -> SyncResult:
     """Push tracker rows to the sheet. `urls` limits the main tab to those postings (after a run); None syncs everything.
     The Action needed tab is always read (for ticks) and rebuilt."""
     result = SyncResult()
@@ -188,9 +198,11 @@ def sync(tracker: "T.Tracker", client, urls: "list[str] | None" = None, action_t
         if cell:
             where.setdefault(T.key(cell), n)                                      # the first row with that URL
     wanted = {T.key(u) for u in urls} if urls is not None else None
-    # found / approved-and-waiting / skipped postings and dry runs are not applications yet: not in the sheet
+    # skipped postings and dry runs are not in the sheet; a Found posting only once it is scored high enough to be worth
+    # a look (the rest stay in the tracker and output/shortlist.json)
     jobs = [j for j in tracker.db.execute(
-        "SELECT * FROM jobs WHERE status NOT IN ('found', 'approved', 'skipped', 'dry_run') ORDER BY id").fetchall()
+        "SELECT * FROM jobs WHERE status NOT IN ('skipped', 'dry_run') "
+        "AND NOT (status='found' AND COALESCE(relevance, 0) < ?) ORDER BY id", (int(found_from),)).fetchall()
             if wanted is None or j["canonical_url"] in wanted]
     for job in jobs:
         values = job_row(job)

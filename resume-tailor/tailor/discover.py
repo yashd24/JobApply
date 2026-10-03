@@ -40,15 +40,17 @@ def _tracker_file() -> Path:
     return tailor.OUTPUT_DIR / "tracker.sqlite3"
 
 
-def show_shortlist(t: "T.Tracker", cfg: dict, write_html: bool = True) -> str:
+def write_shortlist_json(t: "T.Tracker", cfg: dict) -> Path:
+    path = tailor.OUTPUT_DIR / "shortlist.json"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(D.shortlist_records(t.found(), cfg), indent=2, ensure_ascii=False), encoding="utf-8")
+    return path
+
+
+def show_shortlist(t: "T.Tracker", cfg: dict) -> str:
     rows = t.found()
     text = D.format_shortlist(rows, cfg)
-    if write_html and rows:
-        path = tailor.OUTPUT_DIR / "shortlist.html"
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(D.shortlist_html(rows, cfg), encoding="utf-8")
-        text += f"\n(also as a clickable page: {path})"
-    return text
+    return text + f"\n(as data: {write_shortlist_json(t, cfg)}; the Google Sheet is the main view)"
 
 
 def run_discovery(args, cfg: dict) -> int:
@@ -91,9 +93,23 @@ def main() -> int:
     ap.add_argument("--term", action="append", help="use only this search term (repeatable)")
     ap.add_argument("--results", type=int, help="results per search (overrides config)")
     ap.add_argument("--why", action="store_true", help="also print every dropped posting with its reason")
+    ap.add_argument("--recheck", action="store_true",
+                    help="re-judge the postings that are only Found by the CURRENT rules (no scraping, no Claude), then exit")
+    ap.add_argument("--reset-found", action="store_true",
+                    help="forget every posting that is only Found (no decision was ever made on it), then exit; use it after "
+                         "changing the selection rules so the next discovery starts clean")
     args = ap.parse_args()
     try:
         cfg = cfgmod.load_config(CONFIG_FILE)
+        if args.recheck:
+            with T.Tracker(_tracker_file()) as t:
+                gone = D.recheck_found(t, D.load_settings(cfg))
+                print(f"Re-judged {len(t.found()) + len(gone)} Found posting(s): {len(gone)} no longer pass.")
+            return 0
+        if args.reset_found:
+            with T.Tracker(_tracker_file()) as t:
+                print(f"Forgot {t.delete_found()} Found posting(s). Approved, applied and skipped ones are untouched.")
+            return 0
         if args.approve or args.skip:
             with T.Tracker(_tracker_file()) as t:
                 available = [r["id"] for r in t.found()]

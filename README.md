@@ -240,6 +240,48 @@ LinkedIn-only posting is manual. You approve from the shortlist; approved manual
 their link, approved Greenhouse/Lever ones wait for the batch runner (not built yet). Every dropped posting and its
 reason is saved in `output/discovery/`.
 
+## Run everything unattended (`run.py`)
+
+```
+python run.py --dry-run     # discover, filter and SCORE for real; show what would be approved; approve and submit nothing
+python run.py               # the whole flow, nobody at the keyboard (this is what the daily scheduled task runs)
+```
+
+discover -> rules filter (title, experience, location, embedded/frontend-only, duplicates; no Claude) -> **relevance
+score** (one Claude call per 10 postings, 1-10 against your resume, with a one-line reason; honest: roles needing skills
+you do not have score low) -> auto-approve everything at or above `selection.relevance_threshold` (default 7), most
+relevant first, up to the daily cap -> process each -> sync the sheet -> `output/runs/<date>.json` + `.log`.
+**Greenhouse** is run in auto mode and submitted only if every required field is filled and nothing is flagged; if
+anything is flagged, a captcha appears, or the result is unclear, nobody is waited for: the materials are prepared and
+the job is marked **Needs review** with the reason. **Everything else** (Lever, LinkedIn, Naukri, company sites) is
+prepared and marked **Ready for you** with the link. Anything already in the tracker is never applied for again. A
+Claude usage limit stops the run cleanly and the next run resumes. See `plan.md` for the explicit authorisation this
+rests on. The selection rules and term lists live in `config.yaml` under `discovery:`; the shortlist is also written
+as data to `output/shortlist.json` (the Google Sheet is the main view).
+
+### Schedule it daily (Windows Task Scheduler)
+
+The task needs a logged-in desktop (the browser window opens), the PC awake, and `xelatex` and `claude` on your PATH
+(they already are for your normal terminal). Do the one-time setup first: `python apply.py --sync-sheet` (Google
+sign-in) and one successful `python run.py --dry-run`. Then, in PowerShell:
+
+```powershell
+$dir    = 'D:\Projects\JobApply\resume-tailor\tailor'
+$python = "$dir\.venv\Scripts\python.exe"
+$action   = New-ScheduledTaskAction -Execute $python -Argument 'run.py' -WorkingDirectory $dir
+$trigger  = New-ScheduledTaskTrigger -Daily -At 7:30am
+$settings = New-ScheduledTaskSettingsSet -StartWhenAvailable -MultipleInstances IgnoreNew -ExecutionTimeLimit (New-TimeSpan -Hours 5)
+Register-ScheduledTask -TaskName 'JobApply daily run' -Action $action -Trigger $trigger -Settings $settings `
+  -Description 'python run.py: discover, score, apply (Greenhouse auto), prepare the rest'
+```
+
+Or in the Task Scheduler window: Create Task -> Triggers: Daily 7:30 -> Actions: Start a program: Program/script
+`D:\Projects\JobApply\resume-tailor\tailor\.venv\Scripts\python.exe`, Add arguments `run.py`, **Start in**
+`D:\Projects\JobApply\resume-tailor\tailor` -> General: "Run only when user is logged on" -> Settings: "Run task as soon
+as possible after a scheduled start is missed", "If the task is already running: Do not start a new instance". Test it
+with Right-click -> Run (or `Start-ScheduledTask -TaskName 'JobApply daily run'`), then read
+`output\runs\<date>.log` and `<date>.json`. To stop it: `Disable-ScheduledTask -TaskName 'JobApply daily run'`.
+
 ## Prepare the approved jobs (batch runner)
 
 ```

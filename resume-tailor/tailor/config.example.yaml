@@ -32,13 +32,15 @@ platforms:
 # sheets:
 #   spreadsheet_id: ""
 #   sheet_name: Applications
+#   show_found_from: 5     # a Found posting shows in the main tab only from this relevance score up
 
 # Job discovery (python discover.py): saved searches run through python-jobspy. Each search term is run in each
 # location on each site; postings are filtered cheaply (title, age, location, experience asked, duplicates) with no
 # Claude calls, saved as "found", and shown as a shortlist for you to approve. JobSpy scrapes public job pages
 # (no login); keep the numbers modest, because LinkedIn in particular rate-limits (it blocks around page 10).
 discovery:
-  search_terms: [backend engineer, software development engineer, python developer, software engineer]
+  search_terms: [Python Developer, Django Developer, Backend Developer, Backend Engineer, Software Engineer, Software Developer,
+                 SDE 1, Associate Software Engineer, Full Stack Developer]
   locations:
     - {name: Bengaluru, query: "Bengaluru, Karnataka, India"}
     - {name: Remote India, query: India, remote: true}
@@ -46,11 +48,41 @@ discovery:
   max_age_days: 30
   results_per_search: 30          # per site, per term, per location
   country: india                  # JobSpy's country_indeed
-  max_min_experience_years: 2     # drop postings whose MINIMUM experience is above this (yours is about 1.8)
+  max_min_experience_years: 3     # drop a posting if ANY experience requirement in it has a minimum above this
   fetch_description: true         # needed for LinkedIn / Naukri text and Naukri's external apply link (1 extra request each)
   delay_between_searches_s: [5, 10]
   # accept_cities: [Bengaluru, Bangalore]   # defaults; also accepted: remote postings located in `country_name`
-  # title_include / title_exclude: regexes; see jobbot/discovery.py for the defaults (interns, managers, QA... are dropped)
+
+  # --- the rules (all editable; whole words, case-insensitive; a space also matches a hyphen) ---
+  # A title needs one of these words ...
+  title_include_words: [software, sde, swe, backend, back-end, back end, python, django, full stack, full-stack, fullstack,
+                        developer, programmer, java, golang, node, api]
+  # ... and none of these (seniority, interns, QA/test, data science/analyst, frontend-only, mobile-only, DevOps-only, embedded)
+  title_exclude_words: [senior, sr, lead, staff, principal, architect, manager, director, head, intern, internship, trainee,
+                        trainees, apprentice, qa, test, tester, testing, sdet, quality, data scientist, data science,
+                        data analyst, analyst, frontend, front end, front-end, ui developer, ui engineer, react developer,
+                        angular developer, vue developer, mobile, android, ios, flutter, react native, devops, dev ops, sre,
+                        site reliability, embedded, firmware, fpga, vlsi, rtos, bsp, hardware, device driver]
+  # A description mentioning this many DIFFERENT embedded/hardware terms is dropped
+  embedded_min_terms: 2
+  embedded_terms: [i2c, spi, uart, firmware, rtos, microcontroller, embedded c, bsp, fpga, verilog, vhdl, device driver,
+                   can bus, bootloader, yocto, embedded linux, arm cortex, linux kernel]
+  # Frontend-only: two or more frontend terms and NO backend term
+  frontend_terms: [react, angular, vue, javascript, typescript, css, html, ui/ux, frontend, front end, front-end, jquery, redux,
+                   next.js, tailwind, bootstrap]
+  backend_terms: [api, apis, backend, back-end, back end, server, database, sql, postgres, postgresql, mysql, mongodb, redis,
+                  kafka, django, flask, fastapi, node, spring, microservice, microservices, rest, restful, graphql, python, java,
+                  golang, ruby, rails, php, laravel, asp.net, celery]
+
+# Relevance (python run.py, python score.py): one Claude call per 10 postings that passed the rules scores each 1-10
+# against your resume and profile, with a one-line reason. A posting at or above the threshold is auto-approved.
+selection:
+  relevance_threshold: 7
+
+# Unattended runs (python run.py). greenhouse_mode: auto submits when every required field is filled and nothing is flagged;
+# anything else is prepared and marked Needs review. Everything not on Greenhouse is prepared and marked Ready for you.
+run:
+  greenhouse_mode: auto
 
 # Batch runner (python batch.py): prepares the jobs you approved, one at a time. Nothing costs Claude usage until you
 # approve a job. Greenhouse is filled using platforms.greenhouse.mode above (assist: you click Submit); Lever and everything

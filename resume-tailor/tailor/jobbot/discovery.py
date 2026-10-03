@@ -36,11 +36,46 @@ class DiscoveryError(Exception):
 
 # ─── settings (config.yaml: discovery) ───────────────────────────────────────
 
-DEFAULT_TITLE_INCLUDE = (r"engineer|developer|\bsde\b|\bswe\b|programmer|software|back-?end|python|django|full.?stack|"
-                         r"architect")
-DEFAULT_TITLE_EXCLUDE = (r"\b(intern|internship|trainee|training|apprentice|manager|recruiter|sales|sdet|qa|test engineer|"
-                         r"data scientist|front[- ]?end|ios|android|react native|flutter|mobile|wordpress|unpaid|"
-                         r"game|dev ?ops|support engineer|solutions? engineer|hr)\b|(?<!\w)\.net\b")
+# A title must contain one of these words to be a software role we are looking for ...
+DEFAULT_TITLE_INCLUDE_WORDS = ["software", "sde", "swe", "backend", "back-end", "back end", "python", "django", "full stack",
+                               "full-stack", "fullstack", "developer", "programmer", "java", "golang", "node", "api"]
+# ... and none of these (seniority, interns, QA/test, data science/analyst, frontend-only, mobile-only, DevOps-only, embedded).
+DEFAULT_TITLE_EXCLUDE_WORDS = [
+    "senior", "sr", "lead", "staff", "principal", "architect", "manager", "director", "head", "intern", "internship",
+    "trainee", "trainees", "apprentice",
+    "qa", "test", "tester", "testing", "sdet", "quality",
+    "data scientist", "data science", "data analyst", "analyst",
+    "frontend", "front end", "front-end", "ui developer", "ui engineer", "react developer", "angular developer", "vue developer",
+    "mobile", "android", "ios", "flutter", "react native",
+    "devops", "dev ops", "sre", "site reliability",
+    "embedded", "firmware", "fpga", "vlsi", "rtos", "bsp", "hardware", "device driver"]
+# Descriptions dominated by embedded/hardware work (2 or more of these) are dropped. The extras beyond I2C/SPI/UART/firmware/
+# RTOS/microcontroller/embedded C/BSP/FPGA/Verilog are common companions of those.
+DEFAULT_EMBEDDED_TERMS = ["i2c", "spi", "uart", "firmware", "rtos", "microcontroller", "embedded c", "bsp", "fpga", "verilog",
+                          "vhdl", "device driver", "can bus", "bootloader", "yocto", "embedded linux", "arm cortex",
+                          "linux kernel"]
+DEFAULT_EMBEDDED_MIN_TERMS = 2
+# Frontend-only: two or more frontend terms and no backend/API term at all.
+DEFAULT_FRONTEND_TERMS = ["react", "angular", "vue", "javascript", "typescript", "css", "html", "ui/ux", "frontend", "front end",
+                          "front-end", "jquery", "redux", "next.js", "tailwind", "bootstrap"]
+DEFAULT_BACKEND_TERMS = ["api", "apis", "backend", "back-end", "back end", "server", "database", "sql", "postgres", "postgresql",
+                         "mysql", "mongodb", "redis", "kafka", "django", "flask", "fastapi", "node", "spring", "microservice",
+                         "microservices", "rest", "restful", "graphql", "python", "java", "golang", "ruby", "rails", "php",
+                         "laravel", "asp.net", "celery"]
+
+
+def _term_pattern(term: str) -> str:
+    """A whole-word pattern for a term; a space also matches a hyphen or nothing ("front end" ~ front-end, frontend)."""
+    return r"(?<![\w.])" + re.escape(term.strip().lower()).replace(r"\ ", r"[\s\-]*") + r"(?![\w])"
+
+
+def term_regex(terms: "list[str]") -> "re.Pattern":
+    return re.compile("|".join(_term_pattern(t) for t in terms if str(t).strip()) or r"(?!x)x", re.I)
+
+
+def terms_in(text: str, terms: "list[str]") -> list[str]:
+    low = (text or "").lower()
+    return sorted({t for t in terms if t.strip() and re.search(_term_pattern(t), low)})
 
 
 @dataclass
@@ -67,11 +102,22 @@ class Settings:
     # accept_cities (the Bengaluru search), where such a posting is within 25 miles of it.
     accept_states: list[str] = field(default_factory=lambda: ["ka", "karnataka"])
     country_name: str = "India"
-    title_include: str = DEFAULT_TITLE_INCLUDE
-    title_exclude: str = DEFAULT_TITLE_EXCLUDE
+    title_include_words: list[str] = field(default_factory=lambda: list(DEFAULT_TITLE_INCLUDE_WORDS))
+    title_exclude_words: list[str] = field(default_factory=lambda: list(DEFAULT_TITLE_EXCLUDE_WORDS))
+    embedded_terms: list[str] = field(default_factory=lambda: list(DEFAULT_EMBEDDED_TERMS))
+    embedded_min_terms: int = DEFAULT_EMBEDDED_MIN_TERMS
+    frontend_terms: list[str] = field(default_factory=lambda: list(DEFAULT_FRONTEND_TERMS))
+    backend_terms: list[str] = field(default_factory=lambda: list(DEFAULT_BACKEND_TERMS))
     delay_between_searches_s: tuple[float, float] = (5.0, 10.0)
     resolve_links: bool = True
     max_link_resolutions: int = 60
+
+
+def _words(d: dict, name: str, default: "list[str]") -> "list[str]":
+    v = d.get(name, default)
+    if not isinstance(v, list) or not all(isinstance(x, str) for x in v):
+        raise DiscoveryError(f"discovery.{name} must be a list of words")
+    return [x.strip() for x in v if x.strip()]
 
 
 def load_settings(cfg: dict) -> Settings:
@@ -123,8 +169,12 @@ def load_settings(cfg: dict) -> Settings:
         accept_cities=[str(c).lower() for c in d.get("accept_cities", ["Bengaluru", "Bangalore"])],
         accept_remote=bool(d.get("accept_remote", True)), country_name=str(d.get("country_name", "India")),
         accept_states=[str(c).lower() for c in d.get("accept_states", ["KA", "Karnataka"])],
-        title_include=str(d.get("title_include", DEFAULT_TITLE_INCLUDE)),
-        title_exclude=str(d.get("title_exclude", DEFAULT_TITLE_EXCLUDE)),
+        title_include_words=_words(d, "title_include_words", DEFAULT_TITLE_INCLUDE_WORDS),
+        title_exclude_words=_words(d, "title_exclude_words", DEFAULT_TITLE_EXCLUDE_WORDS),
+        embedded_terms=_words(d, "embedded_terms", DEFAULT_EMBEDDED_TERMS),
+        embedded_min_terms=num("embedded_min_terms", DEFAULT_EMBEDDED_MIN_TERMS, 1, 20),
+        frontend_terms=_words(d, "frontend_terms", DEFAULT_FRONTEND_TERMS),
+        backend_terms=_words(d, "backend_terms", DEFAULT_BACKEND_TERMS),
         delay_between_searches_s=(float(delay[0]), float(delay[1])),
         resolve_links=bool(d.get("resolve_links", True)), max_link_resolutions=num("max_link_resolutions", 60, 0, 1000))
 
@@ -133,13 +183,14 @@ def load_settings(cfg: dict) -> Settings:
 
 @dataclass
 class Ask:
-    min_years: "float | None" = None
+    min_years: "float | None" = None          # the HIGHEST minimum mentioned anywhere (what the posting really asks for)
     max_years: "float | None" = None
     label: str = "not stated"
+    mentions: list[str] = field(default_factory=list)       # every mention found, in order, e.g. ["0-2 yrs", "5+ yrs"]
 
 
 _N = r"(\d+(?:\.\d+)?)"
-_RANGE = re.compile(_N + r"\s*(?:-|–|—|to)\s*" + _N + r"\s*\+?\s*(?:years?|yrs?)\b", re.I)
+_RANGE = re.compile(_N + r"\s*(?:-|–|—|to|\?)\s*" + _N + r"\s*\+?\s*(?:years?|yrs?)\b", re.I)
 _PLUS = re.compile(_N + r"\s*\+\s*(?:years?|yrs?)\b", re.I)
 _MINWORD = re.compile(r"(?:minimum|min\.?|at least|atleast|more than|over)\s*(?:of\s*)?" + _N + r"\s*\+?\s*(?:years?|yrs?)\b",
                       re.I)
@@ -150,52 +201,65 @@ _EXP_WORD = re.compile(r"experience|\bexp\b|expertise|background|hands-on|worked
 _REQ_WORD = re.compile(r"develop|engineer|software|back-?end|python|django|programming|building|industry|professional|"
                        r"relevant|work(?:ing)?\b|candidates?|required|requirements?", re.I)
 _FRESHER = re.compile(r"\b(fresher|freshers|entry[- ]level|new grads?|no experience|0 years)\b", re.I)
-
-
-def _num(text: str) -> float:
-    return float(text)
+# The company talking about itself ("we have 10 years of experience in fintech") is not a requirement on the candidate.
+_COMPANY_SELF = re.compile(r"\b(we|we've|our|ours|us)\b|since \d{4}|founded|established|in business|\bthe company\b", re.I)
+_ABOUT_YOU = re.compile(r"\b(you|your|candidate|applicant|required|requirements?|must|should|looking for|ideal|minimum|"
+                        r"preferred|qualifications?|eligib\w*|seeking|hiring|needs?|requires?|expects?|expected|bring|"
+                        r"brings|wants?)\b", re.I)
 
 
 def _fmt(n: float) -> str:
     return f"{n:g}"
 
 
-def _first_match(sentence: str, allow_plain: bool = True) -> "Ask | None":
-    best = None
-    kinds = ((_RANGE, "range"), (_PLUS, "plus"), (_MINWORD, "min")) + (((_PLAIN, "plain"),) if allow_plain else ())
+def _all_matches(sentence: str, allow_plain: bool = True, allow_minword: bool = True) -> "list[Ask]":
+    """EVERY years mention in the sentence (a range, "N+", "minimum N", and a bare "N years" when allowed), each once."""
+    kinds = ((_RANGE, "range"), (_PLUS, "plus")) + (((_MINWORD, "min"),) if allow_minword else ()) + \
+            (((_PLAIN, "plain"),) if allow_plain else ())
+    taken: list[tuple[int, int]] = []
+    found: list[tuple[int, Ask]] = []
     for pattern, kind in kinds:
-        m = pattern.search(sentence)
-        if m and (best is None or m.start() < best[0].start()):
-            best = (m, kind)
-    if not best:
-        return None
-    m, kind = best
-    if kind == "range":
-        lo, hi = _num(m.group(1)), _num(m.group(2))
-        return Ask(lo, hi, f"{_fmt(lo)}-{_fmt(hi)} yrs")
-    n = _num(m.group(1))
-    return Ask(n, None, f"{_fmt(n)}+ yrs" if kind in ("plus", "min") else f"{_fmt(n)} yrs")
+        for m in pattern.finditer(sentence):
+            if any(m.start() < e and s0 < m.end() for s0, e in taken):
+                continue
+            taken.append((m.start(), m.end()))
+            if kind == "range":
+                lo, hi = float(m.group(1)), float(m.group(2))
+                found.append((m.start(), Ask(lo, hi, f"{_fmt(lo)}-{_fmt(hi)} yrs")))
+            else:
+                n = float(m.group(1))
+                found.append((m.start(), Ask(n, None, f"{_fmt(n)}+ yrs" if kind in ("plus", "min") else
+                                             f"{_fmt(n)} {'yr' if n == 1 else 'yrs'}")))
+    return [a for _, a in sorted(found, key=lambda t: t[0])]
 
 
 def years_asked(text: str, structured: "str | None" = None) -> Ask:
-    """The experience a posting asks for: Naukri's own field ("0-2 Yrs") if given, else the FIRST sentence of the
-    description that states years next to an experience word (JDs state the overall requirement first; later
-    "2 years of X" lines are about one skill)."""
-    if structured and (a := _first_match(structured)):
-        return a
+    """What a posting asks for, reading EVERY mention: Naukri's own field ("0-2 Yrs") and every sentence of the description
+    that states years next to an experience word (or a clear "N+" / range / "minimum N" in a requirement sentence). The
+    answer is the highest minimum found, so one "5+ years of backend experience" among softer lines still counts."""
+    mentions: list[Ask] = []
+    if structured:
+        mentions += _all_matches(structured)
     for sentence in re.split(r"(?<=[.!?;])\s+|\n+", text or ""):
-        if _EXP_WORD.search(sentence) and (a := _first_match(sentence)):
-            return a
-        if _REQ_WORD.search(sentence) and (a := _first_match(sentence, allow_plain=False)):
-            return a
+        if _COMPANY_SELF.search(sentence) and not _ABOUT_YOU.search(sentence):
+            continue
+        if _EXP_WORD.search(sentence):
+            mentions += _all_matches(sentence)
+        elif _REQ_WORD.search(sentence):
+            mentions += _all_matches(sentence, allow_plain=False)
+        else:                     # a list fragment ("5+ years;", or "5 to 10 Years" on the line after "Experience Range:")
+            mentions += _all_matches(sentence, allow_plain=False, allow_minword=False)    # only the unmistakable forms
+    if mentions:
+        top = max(mentions, key=lambda m: m.min_years)
+        labels = list(dict.fromkeys(m.label for m in mentions))
+        return Ask(top.min_years, top.max_years, top.label, labels)
     if _FRESHER.search(text or ""):
-        return Ask(0, 0, "fresher / entry level")
+        return Ask(0, 0, "fresher / entry level", ["fresher / entry level"])
     return Ask()
 
 
-_SENIOR_TITLE = re.compile(
-    r"\b(senior|sr\.?|lead|principal|staff|architect|head|director|vp|distinguished|fellow)\b|"
-    r"\b(?:sde|swe|software (?:development )?engineer|engineer|developer)[ -]?(?:iii|iv|v|3|4|5)\b", re.I)
+# A level number or numeral on an engineer title ("SDE III", "Engineer 4") is senior whatever the years say.
+_LEVEL_TITLE = re.compile(r"\b(?:sde|swe|software (?:development )?engineer|engineer|developer)[ -]?(?:iii|iv|v|3|4|5)\b", re.I)
 
 
 # ─── location, title, age ────────────────────────────────────────────────────
@@ -221,11 +285,55 @@ def location_ok(location: str, remote: "bool | None", s: Settings, city_search: 
 
 
 def title_ok(title: str, s: Settings) -> "tuple[bool, str]":
-    if not re.search(s.title_include, title or "", re.I):
-        return False, f"title '{title}' is not a software role"
-    if m := re.search(s.title_exclude, title or "", re.I):
+    if not term_regex(s.title_include_words).search(title or ""):
+        return False, f"title '{title}' is not a software role we look for"
+    if m := term_regex(s.title_exclude_words).search(title or ""):
         return False, f"title '{title}' is excluded ('{m.group(0)}')"
+    if m := _LEVEL_TITLE.search(title or ""):
+        return False, f"title '{title}' is a senior level ('{m.group(0)}')"
     return True, ""
+
+
+def description_ok(title: str, description: str, s: Settings) -> "tuple[bool, str]":
+    """Drop a posting dominated by embedded/hardware work, or a frontend-only one with no backend/API work. A posting whose
+    description could not be fetched passes (there is nothing to judge)."""
+    text = f"{title}\n{description or ''}"
+    if not (description or "").strip():
+        return True, ""
+    emb = terms_in(text, s.embedded_terms)
+    if len(emb) >= s.embedded_min_terms:
+        return False, f"embedded/hardware role (mentions {', '.join(emb[:5])})"
+    fe, be = terms_in(text, s.frontend_terms), terms_in(text, s.backend_terms)
+    if len(fe) >= 2 and not be:
+        return False, f"frontend-only (mentions {', '.join(fe[:4])}) and no backend/API work"
+    return True, ""
+
+
+def recheck_found(tracker, s: Settings, log=print) -> list[dict]:
+    """Apply the CURRENT title, experience and description rules to postings that are only Found (no decision made), using
+    the text already stored, and forget the ones that no longer pass. For when the rules or the parser changed: no new
+    scrape, and anything already scored that survives keeps its score."""
+    gone = []
+    for r in tracker.found():
+        why, kind = "", ""
+        ok, w = title_ok(r["role"] or "", s)
+        if not ok:
+            why, kind = w, "title"
+        else:
+            ask = years_asked(r["description"] or "", r["experience_asked"])
+            if ask.min_years is not None and ask.min_years > s.max_min_experience_years:
+                why, kind = (f"asks {ask.label} (you keep a minimum up to {s.max_min_experience_years:g}); every mention: "
+                             f"{', '.join(ask.mentions)}"), "experience"
+            else:
+                ok, w = description_ok(r["role"] or "", r["description"] or "", s)
+                if not ok:
+                    why, kind = w, "description"
+        if kind:
+            gone.append({"id": r["id"], "company": r["company"], "title": r["role"], "kind": kind, "why": why})
+    tracker.delete_found_ids([g["id"] for g in gone])
+    for g in gone:
+        log(f"  rechecked and dropped #{g['id']} {g['title']} | {g['company']}: {g['why']}")
+    return gone
 
 
 # ─── normalising JobSpy's rows ───────────────────────────────────────────────
@@ -480,10 +588,13 @@ def discover(s: Settings, tracker: "T.Tracker | None", *, scrape_fn: "Callable |
             rep.drop("location", job, why)
             continue
         if job.ask.min_years is not None and job.ask.min_years > s.max_min_experience_years:
-            rep.drop("experience", job, f"asks {job.ask.label} (you keep a minimum up to {s.max_min_experience_years:g})")
+            more = f"; every mention: {', '.join(job.ask.mentions)}" if len(job.ask.mentions) > 1 else ""
+            rep.drop("experience", job, f"asks {job.ask.label} (you keep a minimum up to "
+                                        f"{s.max_min_experience_years:g}){more}")
             continue
-        if job.ask.min_years is None and _SENIOR_TITLE.search(job.title):
-            rep.drop("experience", job, "senior-level title and no years stated")
+        ok, why = description_ok(job.title, job.description, s)
+        if not ok:
+            rep.drop("description", job, why)
             continue
         kept.append(job)
 
@@ -563,19 +674,11 @@ def format_shortlist(rows, cfg: "dict | None" = None, width: int = 30) -> str:
     return "\n".join(out)
 
 
-def shortlist_html(rows, cfg: "dict | None" = None) -> str:
-    import html as H
-    e = H.escape
-    body = "".join(
-        f"<tr><td>{r['id']}</td><td>{e(r['role'] or '')}</td><td>{e(r['company'] or '')}</td><td>{e(r['location'] or '')}</td>"
-        f"<td>{e(r['experience_asked'] or '')}</td><td>{e(route_label(r, cfg))}</td>"
-        f"<td><a href=\"{e(link_of(r))}\">{e(link_of(r)[:70])}</a></td></tr>" for r in rows)
-    return ("<!doctype html><html><head><meta charset=\"utf-8\"><title>Shortlist</title><style>"
-            "body{font:14px system-ui;margin:20px}table{border-collapse:collapse}td,th{border:1px solid #ccc;padding:4px 8px;"
-            "text-align:left}th{background:#f3f3f3}@media(prefers-color-scheme:dark){body{background:#161616;color:#eee}"
-            "td,th{border-color:#444}th{background:#242424}a{color:#8ab4f8}}</style></head><body><h1>Shortlist</h1><table>"
-            "<tr><th>ID</th><th>Title</th><th>Company</th><th>Location</th><th>Experience</th><th>Route</th><th>Link</th></tr>"
-            f"{body}</table></body></html>")
+def shortlist_records(rows, cfg: "dict | None" = None) -> list[dict]:
+    """The shortlist as data (output/shortlist.json): one record per posting still waiting for a decision."""
+    return [{"id": r["id"], "title": r["role"], "company": r["company"], "location": r["location"],
+             "experience_asked": r["experience_asked"], "route": route_label(r, cfg), "link": link_of(r),
+             "relevance_score": r["relevance"], "reason": r["relevance_reason"] or r["reason"]} for r in rows]
 
 
 def parse_ids(text: str, available: "list[int]") -> list[int]:

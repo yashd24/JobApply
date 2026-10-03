@@ -113,18 +113,36 @@ def _already_submitted(url: str):
         return None
 
 
+def _needs_review(job_dir: Path, answers, resume_pdf: Path, job, reasons: list, meta: dict) -> dict:
+    """An unattended run that must not submit: the materials are prepared (resume, cover letter, answers, a copy-ready
+    sheet) and the job is marked Needs review with the reason, because nobody is at the keyboard to help."""
+    meta["switched_to_assist_because"] = reasons
+    why = "; ".join(reasons[:4]) + (f" (+{len(reasons) - 4} more)" if len(reasons) > 4 else "")
+    banner = "NEEDS YOUR REVIEW (nothing was submitted): " + why
+    try:
+        prepare.write_sheet(job_dir, answers, resume_pdf, job, banner)
+    except Exception as e:                       # the sheet is a convenience; the status and reason are what matter
+        print(f"    (could not write the review sheet: {type(e).__name__})")
+    return {"status": "needs_review", "confirmation": None, "reason": "not submitted: " + why,
+            "validation_errors": []}
+
+
 def _status_from(confirmed: "bool | None") -> str:
     return {True: "submitted", False: "failed", None: "needs_review"}[confirmed]
 
 
-def wait_for_result(session, adapter, *, timeout_s: "float | None" = None, poll_s: float = 1.5) -> "bool | None":
+def wait_for_result(session, adapter, *, timeout_s: "float | None" = None, poll_s: float = 1.5,
+                    unattended: bool = False) -> "bool | None":
     """After a submit click: hand over any visible challenge, then wait for a verdict.
-    True = confirmed, False = validation errors, None = unclear."""
+    True = confirmed, False = validation errors, None = unclear. Unattended (nobody at the keyboard): a visible challenge
+    is never waited for or bypassed; the answer is None (unclear) and the caller records why."""
     timeout_s = RESULT_WAIT_S if timeout_s is None else timeout_s          # read at call time, so it can be tuned
     deadline = time.time() + timeout_s
     page = session.page
     while time.time() < deadline:
         challenge = adapter.challenge(page)
+        if challenge and unattended:
+            return None
         if challenge:
             session.hand_over(f"A {challenge.replace('-', ' ')} needs you. Complete it in the browser window "
                               "(it is never bypassed), then press Enter.",
@@ -273,7 +291,7 @@ def mark_submitted(job_dir: Path) -> dict:
 def run(url: str, *, mode: "str | None" = None, allow_submit: "str | None" = None, dry_run: bool = False,
         resume_pdf: "Path | None" = None, headless: bool = False, keep_open: bool = False,
         session_factory=None, opener=None, input_fn=input, reapply: bool = False,
-        resume_from: "Path | None" = None, prepare_interactive: bool = True) -> dict:
+        resume_from: "Path | None" = None, prepare_interactive: bool = True, unattended: bool = False) -> dict:
     """`session_factory(job_dir) -> BrowserSession` lets tests drive the run with a scripted user; `opener(url)` and
     `input_fn(prompt)` stand in for the default browser and the terminal in prepare mode. `resume_from` is a job
     folder from an earlier run: its tailored resume and cover letter are reused instead of being made again."""
@@ -392,7 +410,12 @@ def run(url: str, *, mode: "str | None" = None, allow_submit: "str | None" = Non
                 meta["would_need_assist"].append("a security-code step is showing")
             meta["fill_problems"] = [r.label for r in results + recheck if not r.ok]
 
-            if used == "assist":
+            if used == "assist" and unattended:
+                reasons = ["assist mode needs a person to click Submit and nobody is at the keyboard (unattended run)"]
+                outcome = _needs_review(job_dir, answers, resume_pdf, job, reasons, meta)
+                outcome["verification"] = adapter.verify(b.page).to_dict()
+                shots.extend(filter(None, [_snap(b, "needs_review")]))
+            elif used == "assist":
                 verdict = assist(b, adapter, answers)
                 outcome = {"status": _status_from(verdict), "confirmation": verdict}
                 outcome["verification"] = adapter.verify(b.page).to_dict()
@@ -401,7 +424,14 @@ def run(url: str, *, mode: "str | None" = None, allow_submit: "str | None" = Non
                 shots.extend(filter(None, [_snap(b, "after_submit")]))
             elif used == "auto":
                 reasons = list(meta["would_need_assist"]) + [f"could not fill: {x}" for x in meta["fill_problems"]]
-                if reasons:
+                if reasons and unattended:
+                    print("\nAUTO (unattended) -> NEEDS REVIEW. Not submitting because:")
+                    for r in reasons:
+                        print("   -", r)
+                    outcome = _needs_review(job_dir, answers, resume_pdf, job, reasons, meta)
+                    outcome["verification"] = adapter.verify(b.page).to_dict()
+                    shots.extend(filter(None, [_snap(b, "needs_review")]))
+                elif reasons:
                     print("\nAUTO -> ASSIST. Not submitting automatically because:")
                     for r in reasons:
                         print("   -", r)
@@ -411,12 +441,20 @@ def run(url: str, *, mode: "str | None" = None, allow_submit: "str | None" = Non
                     shots.append(b.screenshot("before_submit"))
                     print("\nAUTO: every required field is filled and nothing is flagged. Submitting.")
                     adapter.submit(b.page)
-                    verdict = wait_for_result(b, adapter)
-                outcome = {"status": _status_from(verdict), "confirmation": verdict}
-                outcome["verification"] = adapter.verify(b.page).to_dict()
-                if outcome["status"] != "submitted":
-                    outcome["validation_errors"] = adapter.validation_errors(b.page)
-                shots.extend(filter(None, [_snap(b, "after_submit")]))
+                    verdict = wait_for_result(b, adapter, unattended=unattended)
+                if not (reasons and unattended):
+                    outcome = {"status": _status_from(verdict), "confirmation": verdict}
+                    outcome["verification"] = adapter.verify(b.page).to_dict()
+                    if outcome["status"] != "submitted":
+                        outcome["validation_errors"] = adapter.validation_errors(b.page)
+                        if unattended and verdict is None:
+                            challenge = adapter.challenge(b.page)
+                            outcome["reason"] = (
+                                f"a {challenge.replace('-', ' ')} appeared after Submit and nobody was there to handle it "
+                                "(nothing was bypassed): check your email and the employer's page" if challenge else
+                                outcome["verification"].get("reason") or "no confirmation was seen after Submit: check your "
+                                "email and the employer's page")
+                    shots.extend(filter(None, [_snap(b, "after_submit")]))
             meta["screenshots"] = [str(s) for s in shots]
             if keep_open and used == "dry-run":
                 b.pause_for_user("Dry run finished. Look at the form; NOTHING was submitted. Press Enter to close.")

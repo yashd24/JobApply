@@ -46,6 +46,8 @@ def label(status: "str | None") -> str:
 def run_reason(status: str, res: dict, answers: dict) -> str:
     """One plain sentence on WHY a run ended in this status, for the Reason column."""
     verification = res.get("verification") or {}
+    if res.get("reason") and status in ("needs_review", "failed"):
+        return str(res["reason"])[:400]
     errors = [str(e) for e in (res.get("validation_errors") or []) if e]
     flagged = (answers.get("summary") or {}).get("flagged")
     if status == "submitted":
@@ -67,7 +69,8 @@ def run_reason(status: str, res: dict, answers: dict) -> str:
 # Columns added for job discovery (existing databases are migrated in place).
 DISCOVERY_COLUMNS = {"route": "TEXT", "source": "TEXT", "source_url": "TEXT", "direct_url": "TEXT",
                      "experience_asked": "TEXT", "fingerprint": "TEXT", "date_posted": "TEXT", "last_seen": "TEXT",
-                     "reason": "TEXT", "job_folder": "TEXT", "description": "TEXT"}
+                     "reason": "TEXT", "job_folder": "TEXT", "description": "TEXT",
+                     "relevance": "INTEGER", "relevance_reason": "TEXT"}
 _LEGAL_SUFFIX = re.compile(r"\b(pvt|private|ltd|limited|inc|llc|llp|corp|corporation|india|co)\b")
 
 
@@ -216,15 +219,45 @@ class Tracker:
         return bool(company and self.db.execute("SELECT 1 FROM jobs WHERE fingerprint=? AND status!='found'", (fp,)).fetchone())
 
     def found(self) -> list[sqlite3.Row]:
-        """The shortlist: discovered postings still waiting for a decision. ATS routes first, then newest."""
+        """The shortlist: discovered postings still waiting for a decision. Most relevant first (unscored last), then ATS
+        routes, then newest."""
         return self.db.execute(
-            "SELECT * FROM jobs WHERE status='found' ORDER BY (route='manual'), COALESCE(date_posted, '') DESC, id").fetchall()
+            "SELECT * FROM jobs WHERE status='found' ORDER BY COALESCE(relevance, 0) DESC, (route='manual'), "
+            "COALESCE(date_posted, '') DESC, id").fetchall()
+
+    def unscored(self) -> list[sqlite3.Row]:
+        """Found postings that have no relevance score yet (they cost nothing until scored)."""
+        return self.db.execute("SELECT * FROM jobs WHERE status='found' AND relevance IS NULL ORDER BY id").fetchall()
+
+    def set_relevance(self, job_id: int, score: int, reason: str) -> None:
+        self.db.execute("UPDATE jobs SET relevance=?, relevance_reason=? WHERE id=?", (int(score), reason, job_id))
+        self.db.commit()
+
+    def top_found(self, threshold: int, limit: int) -> list[sqlite3.Row]:
+        """Found postings scored at or above the threshold: the most relevant first, then newest, up to `limit`."""
+        return self.db.execute(
+            "SELECT * FROM jobs WHERE status='found' AND relevance >= ? "
+            "ORDER BY relevance DESC, COALESCE(date_posted, '') DESC, id LIMIT ?", (int(threshold), max(0, int(limit)))).fetchall()
+
+    def delete_found_ids(self, ids: list[int]) -> int:
+        """Forget these postings, but only while they are still just Found."""
+        if not ids:
+            return 0
+        n = self.db.execute(f"DELETE FROM jobs WHERE status='found' AND id IN ({', '.join('?' * len(ids))})", list(ids)).rowcount
+        self.db.commit()
+        return n
+
+    def delete_found(self) -> int:
+        """Forget every posting that is still only "found" (never a decision): used to re-run discovery under new rules."""
+        n = self.db.execute("DELETE FROM jobs WHERE status='found'").rowcount
+        self.db.commit()
+        return n
 
     def by_ids(self, ids: list[int]) -> list[sqlite3.Row]:
         marks = ", ".join("?" * len(ids))
         return self.db.execute(f"SELECT * FROM jobs WHERE id IN ({marks}) ORDER BY id", list(ids)).fetchall() if ids else []
 
-    def decide(self, ids: list[int], approve: bool) -> dict:
+    def decide(self, ids: list[int], approve: bool, why: "str | None" = None) -> dict:
         """Approve or skip shortlisted postings (only ones still in status found). EVERY approved posting waits for the
         batch runner ("approved"), which prepares it (Greenhouse is filled in assist mode; everything else gets a tailored
         resume, a cover letter and an answer sheet and becomes "Ready for you"). Nothing costs Claude usage before
@@ -235,11 +268,11 @@ class Tracker:
                 out["ignored"].append(r["id"])
                 continue
             new = "approved" if approve else "skipped"
-            why = ({"greenhouse": "approved: the batch runner will fill it in assist mode and you click Submit",
+            reason_text = why or ({"greenhouse": "approved: the batch runner will fill it in assist mode and you click Submit",
                     "lever": "approved: the batch runner prepares the resume, cover letter and answers; you apply by hand"}
                    .get(r["route"], "approved: the batch runner prepares a tailored resume, cover letter and likely answers; "
                                     "you apply by hand") if approve else "declined from the shortlist")
-            self.db.execute("UPDATE jobs SET status=?, reason=? WHERE id=?", (new, why, r["id"]))
+            self.db.execute("UPDATE jobs SET status=?, reason=? WHERE id=?", (new, reason_text, r["id"]))
             out[new].append(r["id"])
         out["ignored"] += [i for i in ids if i not in {r["id"] for r in self.by_ids(ids)}]
         self.db.commit()

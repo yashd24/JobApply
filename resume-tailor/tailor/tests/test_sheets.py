@@ -80,16 +80,16 @@ class FakeSheet:
             del cells[key]
 
     # helpers for the tests
-    def row(self, n, tab=None, width=18):
+    def row(self, n, tab=None, width=20):
         cells = self.tabs[tab or self.MAIN]
         return [cells.get((n, c), "") for c in range(1, width + 1)]
 
     def manual(self):
-        return {k: v for k, v in self.cells.items() if k[1] >= 15}
+        return {k: v for k, v in self.cells.items() if k[1] >= 17}
 
     def set_manual(self, n, values):
         for j, v in enumerate(values):
-            self.cells[(n, 15 + j)] = v
+            self.cells[(n, 17 + j)] = v
 
     def row_for(self, url):
         return next(r for r in range(2, 50) if self.cells.get((r, 7)) == url)
@@ -120,15 +120,16 @@ class Sync(unittest.TestCase):
         r = S.sync(self.t, self.sheet)
         self.assertEqual((r.added, r.updated, r.unchanged), (2, 0, 0))
         self.assertEqual(self.sheet.row(1), S.HEADER)
-        self.assertEqual(S.HEADER[:14], ["Date", "Status", "Mode", "Company", "Role", "Location", "URL", "Score",
-                                         "Flagged fields", "Resume file used", "Gaps", "Notes", "Reason", "Job folder"])
-        self.assertEqual(S.HEADER[14:], ["Response", "Interview stage", "Follow-up date", "My notes"])
+        self.assertEqual(S.HEADER[:16], ["Date", "Status", "Mode", "Company", "Role", "Location", "URL", "Score",
+                                         "Flagged fields", "Resume file used", "Gaps", "Notes", "Reason", "Job folder",
+                                         "Relevance", "Relevance reason"])
+        self.assertEqual(S.HEADER[16:], ["Response", "Interview stage", "Follow-up date", "My notes"])
         row = self.sheet.row(self.sheet.row_for(GH))
         self.assertEqual(row[:7], ["2026-10-02", "Submitted", "assist", "project44", "Software Engineer 2", "Bengaluru", GH])
         self.assertEqual((row[7], row[8]), ("7", "Why us?; Salary"))
         self.assertTrue(row[9].startswith("a/") and row[9].endswith("/r.pdf"), row[9])
         self.assertEqual(row[10], "Kafka")
-        self.assertEqual(row[14:], ["", "", "", ""])
+        self.assertEqual(row[16:], ["", "", "", ""])
         self.assertEqual(self.sheet.row(self.sheet.row_for(LV))[2], "manual")           # a hand submission says so
 
     def test_a_second_sync_changes_nothing(self):
@@ -151,7 +152,7 @@ class Sync(unittest.TestCase):
         self.assertEqual(r.updated, 1)
         self.assertEqual(self.sheet.row(n)[11], "checked by hand")
         self.assertEqual(self.sheet.manual(), before)
-        self.assertEqual(self.sheet.row(n)[14:], ["Rejected", "Phone screen", "2026-10-20", "Recruiter was kind"])
+        self.assertEqual(self.sheet.row(n)[16:], ["Rejected", "Phone screen", "2026-10-20", "Recruiter was kind"])
 
     def test_sorting_the_sheet_cannot_make_the_bot_write_to_the_wrong_row(self):
         S.sync(self.t, self.sheet)
@@ -159,15 +160,15 @@ class Sync(unittest.TestCase):
         self.sheet.set_manual(a, ["Rejected", "", "", "about project44"])
         self.sheet.set_manual(b, ["Interview", "Round 1", "2026-10-09", "about Hevo"])
         rows = {n: self.sheet.row(n) for n in (a, b)}                           # the user swaps the two rows
-        for c in range(1, 19):
+        for c in range(1, 21):
             self.sheet.cells[(a, c)], self.sheet.cells[(b, c)] = rows[b][c - 1], rows[a][c - 1]
         self.t.db.execute("UPDATE jobs SET status='failed', notes='x' WHERE canonical_url=?", (T.key(LV),))
         self.t.db.commit()
         S.sync(self.t, self.sheet)
         hevo = self.sheet.row(self.sheet.row_for(LV))
-        self.assertEqual((hevo[1], hevo[11], hevo[14:]), ("Failed", "x", ["Interview", "Round 1", "2026-10-09", "about Hevo"]))
+        self.assertEqual((hevo[1], hevo[11], hevo[16:]), ("Failed", "x", ["Interview", "Round 1", "2026-10-09", "about Hevo"]))
         p44 = self.sheet.row(self.sheet.row_for(GH))
-        self.assertEqual((p44[1], p44[14], p44[17]), ("Submitted", "Rejected", "about project44"))
+        self.assertEqual((p44[1], p44[16], p44[19]), ("Submitted", "Rejected", "about project44"))
 
     def test_a_new_posting_is_appended_without_touching_existing_rows(self):
         S.sync(self.t, self.sheet)
@@ -175,12 +176,12 @@ class Sync(unittest.TestCase):
         self.t.record_folder(folder(self.root, "new", "https://job-boards.greenhouse.io/acme/jobs/9", "failed"))
         r = S.sync(self.t, self.sheet)
         self.assertEqual((r.added, r.unchanged), (1, 2))
-        self.assertEqual(self.sheet.cells[(2, 15)], "Seen")
+        self.assertEqual(self.sheet.cells[(2, 17)], "Seen")
         self.assertEqual(self.sheet.cells[(4, 7)], "https://job-boards.greenhouse.io/acme/jobs/9")
 
     def test_only_the_given_urls_are_synced_after_a_run(self):
         r = S.sync(self.t, self.sheet, urls=[GH + "/"])
-        self.assertEqual((r.added, len(self.sheet.read("A1:R"))), (1, 2))        # header + project44 only
+        self.assertEqual((r.added, len(self.sheet.read("A1:T"))), (1, 2))        # header + project44 only
 
     def test_notes_are_written_as_given_so_they_cannot_become_formulas(self):
         self.t.db.execute("UPDATE jobs SET notes=? WHERE canonical_url=?", ('=HYPERLINK("x")', T.key(GH)))
@@ -193,23 +194,23 @@ class Sync(unittest.TestCase):
 
     def test_the_guard_refuses_any_write_into_the_users_columns(self):
         guarded = S._AutoOnly(self.sheet)
-        for bad in ("O2", "O2:R2", "A2:O2", "A2:R2", "R1", "N2:O2"):
+        for bad in ("Q2", "Q2:T2", "A2:Q2", "A2:T2", "T1", "P2:Q2"):
             with self.assertRaises(S.SheetsError, msg=bad):
                 guarded.write(bad, [["x"]])
         with self.assertRaises(S.SheetsError):
-            guarded.append("A:N", [["x"] * 15])
+            guarded.append("A:P", [["x"] * 17])
         with self.assertRaises(S.SheetsError):
-            guarded.append("A:R", [["x"]])
-        guarded.write("A2:N2", [["x"] * 14])
-        guarded.append("A:N", [["y"] * 14])
+            guarded.append("A:T", [["x"]])
+        guarded.write("A2:P2", [["x"] * 16])
+        guarded.append("A:P", [["y"] * 16])
         self.assertEqual(self.sheet.manual(), {})
 
     def test_an_existing_sheet_keeps_the_users_renamed_manual_headers(self):
         S.sync(self.t, self.sheet)
-        self.sheet.cells[(1, 15)] = "Reply"                                         # the user renamed a header
+        self.sheet.cells[(1, 17)] = "Reply"                                         # the user renamed a header
         self.sheet.cells[(1, 2)] = "State"                                           # and changed one of ours
         S.sync(self.t, self.sheet)
-        self.assertEqual((self.sheet.cells[(1, 15)], self.sheet.cells[(1, 2)]), ("Reply", "Status"))
+        self.assertEqual((self.sheet.cells[(1, 17)], self.sheet.cells[(1, 2)]), ("Reply", "Status"))
 
     def test_every_write_of_a_full_scenario_stays_in_the_bots_columns(self):
         S.sync(self.t, self.sheet)
@@ -217,8 +218,8 @@ class Sync(unittest.TestCase):
         self.t.db.commit()
         S.sync(self.t, self.sheet)
         for kind, a1, tab in self.sheet.log:
-            if tab is None and a1 != "A1:R1":                                        # main tab; R1 = header of an empty sheet
-                self.assertLessEqual(S.columns_of(a1)[1], 14, (kind, a1))
+            if tab is None and a1 != "A1:T1":                                        # main tab; T1 = header of an empty sheet
+                self.assertLessEqual(S.columns_of(a1)[1], 16, (kind, a1))
 
 
 class ConfigAndWiring(unittest.TestCase):
@@ -279,7 +280,7 @@ class ConfigAndWiring(unittest.TestCase):
         g = S.GoogleSheet("id", "Applications", Path("nope.json"), Path("nope-token.json"))
         with mock.patch.dict(sys.modules, {"googleapiclient": None, "googleapiclient.discovery": None}):
             with self.assertRaises(S.SheetsError) as cm:
-                g.read("A1:R")
+                g.read("A1:T")
         self.assertIn("pip install google-api-python-client google-auth-oauthlib", str(cm.exception))
 
 
