@@ -287,6 +287,42 @@ as possible after a scheduled start is missed", "If the task is already running:
 with Right-click -> Run (or `Start-ScheduledTask -TaskName 'JobApply daily run'`), then read
 `output\runs\<date>.log` and `<date>.json`. To stop it: `Disable-ScheduledTask -TaskName 'JobApply daily run'`.
 
+## The `jobapply` command (any terminal, any folder)
+
+`resume-tailor\tailor\bin\jobapply.cmd` is a short command for the daily routine. It uses the absolute paths of the
+project's venv and folder, so it works from PowerShell or cmd in any folder. (If you move the project, edit the one
+`JOBAPPLY_HOME` line at the top of the file.)
+
+| Type | What it does |
+|---|---|
+| `jobapply` | the full run (`run.py`) |
+| `jobapply dry` | a dry run: discover, filter and score; approve and submit nothing |
+| `jobapply status [N]` | recent applications |
+| `jobapply sync` | sync the Google Sheet |
+| `jobapply action` | the jobs that need you (Ready for you, Needs review, Manual, Failed), each with its link, job folder and reason |
+| `jobapply log` | open today's run log |
+| `jobapply stop` / `jobapply start` | disable / enable the daily scheduled task (`JobApply daily run`) |
+| `jobapply help` | list these |
+
+Anything else is passed to `run.py`: `jobapply --skip-discovery`, `jobapply dry --skip-discovery`. A run ends with a
+five-number summary (found, scored, submitted, ready for you, needs review) as the last thing on screen; the full
+summary and log stay in `output\runs\`. `stop` / `start` need the scheduled task to exist (see above) and say so if it
+does not.
+
+**Add it to your PATH (once, for your user; nothing needs administrator rights):**
+
+1. Press Win, type `environment variables`, open **Edit environment variables for your account**.
+2. Under **User variables**, select **Path**, click **Edit**.
+3. Click **New** and paste `D:\Projects\JobApply\resume-tailor\tailor\bin`. Click **OK** on all three windows.
+4. Open a **new** terminal (already-open ones keep the old PATH) and test, from any folder:
+   ```
+   cd C:\
+   jobapply help
+   jobapply status 3
+   where.exe jobapply          (should print ...\resume-tailor\tailor\bin\jobapply.cmd)
+   ```
+   Try it in both PowerShell and cmd. Nothing in the project changes your PATH for you.
+
 ## Prepare the approved jobs (batch runner)
 
 ```
