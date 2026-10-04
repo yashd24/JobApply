@@ -244,7 +244,7 @@ reason is saved in `output/discovery/`.
 
 ```
 python run.py --dry-run     # discover, filter and SCORE for real; show what would be approved; approve and submit nothing
-python run.py               # the whole flow, nobody at the keyboard (this is what the daily scheduled task runs)
+python run.py               # the whole flow; you start it yourself (nothing is scheduled)
 ```
 
 discover -> rules filter (title, experience, location, embedded/frontend-only, duplicates; no Claude) -> **relevance
@@ -264,32 +264,9 @@ After scoring, a posting with no employer link is looked up on the company's Gre
 ONLY if the company, title (every word), location and a live job all match and exactly one job fits; the evidence is
 logged and kept (`discover.py --board-check --dry-run` previews it). Anything weaker stays on its route.
 
-### Schedule it daily (Windows Task Scheduler)
-
-The task needs a logged-in desktop (the browser window opens), the PC awake, and `xelatex` and `claude` on your PATH
-(they already are for your normal terminal). Do the one-time setup first: `python apply.py --sync-sheet` (Google
-sign-in) and one successful `python run.py --dry-run`. Then, in PowerShell:
-
-```powershell
-$dir    = 'D:\Projects\JobApply\resume-tailor\tailor'
-$python = "$dir\.venv\Scripts\python.exe"
-$action   = New-ScheduledTaskAction -Execute $python -Argument 'run.py' -WorkingDirectory $dir
-$trigger  = New-ScheduledTaskTrigger -Daily -At 7:30am
-$settings = New-ScheduledTaskSettingsSet -StartWhenAvailable -MultipleInstances IgnoreNew -ExecutionTimeLimit (New-TimeSpan -Hours 5)
-Register-ScheduledTask -TaskName 'JobApply daily run' -Action $action -Trigger $trigger -Settings $settings `
-  -Description 'python run.py: discover, score, apply (Greenhouse auto), prepare the rest'
-```
-
-Or in the Task Scheduler window: Create Task -> Triggers: Daily 7:30 -> Actions: Start a program: Program/script
-`D:\Projects\JobApply\resume-tailor\tailor\.venv\Scripts\python.exe`, Add arguments `run.py`, **Start in**
-`D:\Projects\JobApply\resume-tailor\tailor` -> General: "Run only when user is logged on" -> Settings: "Run task as soon
-as possible after a scheduled start is missed", "If the task is already running: Do not start a new instance". Test it
-with Right-click -> Run (or `Start-ScheduledTask -TaskName 'JobApply daily run'`), then read
-`output\runs\<date>.log` and `<date>.json`. To stop it: `Disable-ScheduledTask -TaskName 'JobApply daily run'`.
-
 ## The `jobapply` command (any terminal, any folder)
 
-`resume-tailor\tailor\bin\jobapply.cmd` is a short command for the daily routine. It uses the absolute paths of the
+`resume-tailor\tailor\bin\jobapply.cmd` is a short command for running the bot by hand. It uses the absolute paths of the
 project's venv and folder, so it works from PowerShell or cmd in any folder. (If you move the project, edit the one
 `JOBAPPLY_HOME` line at the top of the file.)
 
@@ -301,13 +278,19 @@ project's venv and folder, so it works from PowerShell or cmd in any folder. (If
 | `jobapply sync` | sync the Google Sheet |
 | `jobapply action` | the jobs that need you (Ready for you, Needs review, Manual, Failed), each with its link, job folder and reason |
 | `jobapply log` | open today's run log |
-| `jobapply stop` / `jobapply start` | disable / enable the daily scheduled task (`JobApply daily run`) |
+| `jobapply stop` | stop a run in progress cleanly, from a second terminal (see below) |
 | `jobapply help` | list these |
 
 Anything else is passed to `run.py`: `jobapply --skip-discovery`, `jobapply dry --skip-discovery`. A run ends with a
 five-number summary (found, scored, submitted, ready for you, needs review) as the last thing on screen; the full
-summary and log stay in `output\runs\`. `stop` / `start` need the scheduled task to exist (see above) and say so if it
-does not.
+summary and log stay in `output\runs\`.
+
+**Stopping a run cleanly.** `jobapply stop` (from a second terminal) or one Ctrl+C in the run's own window asks the run
+to stop. It finishes and saves the job it is on, updates the tracker, syncs the sheet and exits. It looks for the request
+between jobs, between searches and between scoring batches, so it can take a few minutes if a job is mid-way. Scores are
+saved after every batch and approved jobs keep their folder, so the next `jobapply` continues without repeating paid
+work. A second Ctrl+C aborts at once: what is saved is kept, but the job in progress may be repeated. `jobapply stop`
+with no run in progress says so and does nothing.
 
 **Add it to your PATH (once, for your user; nothing needs administrator rights):**
 

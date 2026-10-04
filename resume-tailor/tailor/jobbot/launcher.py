@@ -6,11 +6,12 @@
     jobapply sync             sync the Google Sheet
     jobapply action           the jobs that need you: Ready for you, Needs review, Manual, Failed
     jobapply log              open today's run log
-    jobapply stop             disable the daily scheduled task
-    jobapply start            enable the daily scheduled task
+    jobapply stop             stop a run in progress cleanly (from a second terminal): the job in progress is finished and
+                              saved, the tracker is updated, the run exits, and the next jobapply continues from there
     jobapply help             this list
 
 Any other arguments go straight to run.py, so `jobapply --skip-discovery` works.
+Ctrl+C in the run's own window does the same clean stop; a second Ctrl+C aborts at once.
 """
 from __future__ import annotations
 
@@ -23,7 +24,6 @@ from dataclasses import dataclass, field
 from datetime import date
 from pathlib import Path
 
-TASK_NAME = "JobApply daily run"
 ROOT = Path(__file__).resolve().parents[1]
 
 HELP = (__doc__ or "").strip()
@@ -31,9 +31,8 @@ HELP = (__doc__ or "").strip()
 
 @dataclass
 class Plan:
-    kind: str                                   # run | apply | action | log | task | help
+    kind: str                                   # run | apply | action | log | stop | help
     args: list[str] = field(default_factory=list)
-    enable: bool = False                        # kind == "task"
 
 
 def parse(argv: list[str]) -> Plan:
@@ -53,8 +52,8 @@ def parse(argv: list[str]) -> Plan:
         return Plan("action")
     if word == "log":
         return Plan("log")
-    if word in ("stop", "start"):
-        return Plan("task", enable=(word == "start"))
+    if word == "stop":
+        return Plan("stop")
     return Plan("run", list(argv))
 
 
@@ -105,17 +104,60 @@ def open_log(opener=None) -> int:
     return 0
 
 
-def set_task(enable: bool, runner=subprocess.run) -> int:
-    flag = "/ENABLE" if enable else "/DISABLE"
-    res = runner(["schtasks", "/Change", "/TN", TASK_NAME, flag], capture_output=True, text=True)
-    text = ((res.stdout or "") + (res.stderr or "")).strip()
-    word = "enable" if enable else "disable"
-    if res.returncode == 0:
-        print(f"The daily task '{TASK_NAME}' is now {word}d.")
-    else:
-        print(f"Could not {word} '{TASK_NAME}': {text or 'schtasks failed'}\n"
-              "(Is the task registered? See the README for how to create it.)")
-    return res.returncode
+def stop_run(alive=None) -> int:
+    """Ask the run in progress (if any) to stop cleanly. The request is a file the run looks at between jobs."""
+    from jobbot import stopflag
+    pid = stopflag.running_pid(alive) if alive else stopflag.running_pid()
+    if pid is None:
+        print("No run is in progress, so there is nothing to stop.")
+        return 0
+    if stopflag.requested():
+        print(f"A stop was already requested; the run (process {pid}) is finishing its current job.")
+        return 0
+    stopflag.request()
+    print(f"Stop requested for the run in progress (process {pid}).\n"
+          "It finishes and saves the job it is on, updates the tracker, then exits; that can take a few minutes.\n"
+          "The next `jobapply` continues from there without repeating paid work.")
+    return 0
+
+
+def supervise(proc, request_stop, abort, kill, say=print, poll_s: float = 0.5) -> int:
+    """Wait for the run. First Ctrl+C: ask for a clean stop. Second: abort at once. Third: kill it."""
+    presses = 0
+    while True:
+        try:
+            return proc.wait(timeout=poll_s)
+        except subprocess.TimeoutExpired:
+            continue
+        except KeyboardInterrupt:
+            presses += 1
+            if presses == 1:
+                request_stop()
+                say("\nCtrl+C: stopping cleanly. The job in progress is finished and saved, then the run exits. "
+                    "Press Ctrl+C again to abort at once (the job in progress may be repeated).")
+            elif presses == 2:
+                say("\nAborting at once...")
+                abort()
+            else:
+                say("\nKilling the run.")
+                kill()
+
+
+def run_worker(args: list[str], popen=subprocess.Popen) -> int:
+    """Run run.py as a child in its own console process group, so a Ctrl+C in this window reaches only this launcher
+    (and not the claude / LaTeX / browser processes mid-job); the launcher turns it into a clean-stop request."""
+    import signal
+    from jobbot import stopflag
+    flags = subprocess.CREATE_NEW_PROCESS_GROUP if os.name == "nt" else 0
+    proc = popen([sys.executable, str(ROOT / "run.py"), *args], cwd=str(ROOT), creationflags=flags)
+
+    def abort():
+        try:
+            proc.send_signal(signal.CTRL_BREAK_EVENT if os.name == "nt" else signal.SIGINT)
+        except (OSError, ValueError):
+            proc.kill()
+
+    return supervise(proc, lambda: stopflag.request("Ctrl+C"), abort, proc.kill)
 
 
 def newest_summary(since: float) -> "dict | None":
@@ -173,12 +215,12 @@ def main(argv: "list[str] | None" = None) -> int:
         return show_action()
     if plan.kind == "log":
         return open_log()
-    if plan.kind == "task":
-        return set_task(plan.enable)
+    if plan.kind == "stop":
+        return stop_run()
     if plan.kind == "apply":
         return run_module("apply", plan.args)
     started = time.time()
-    code = run_module("run", plan.args)
+    code = run_worker(plan.args)
     if not any(a in ("-h", "--help") for a in plan.args):
         print(summary_block(newest_summary(started) if code == 0 else None))
     return code

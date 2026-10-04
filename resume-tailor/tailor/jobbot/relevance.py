@@ -212,13 +212,16 @@ class ScoreReport:
 
 
 def score_unscored(tracker, llm, resume: dict, profile: dict, *, batch_size: int = BATCH_SIZE, log=print,
-                   today: "date | None" = None, rules: "Rules | None" = None) -> ScoreReport:
+                   today: "date | None" = None, rules: "Rules | None" = None, should_stop=None) -> ScoreReport:
     """Score every Found posting that has no score, 10 per call. Progress is saved after each batch, so a usage limit
     (UsageLimitError propagates) loses nothing: the next run continues with what is still unscored."""
     rep = ScoreReport()
     rows = tracker.unscored()
     summary = candidate_summary(resume, profile, today)
     for i in range(0, len(rows), batch_size):
+        if should_stop and should_stop():
+            log(f"  stop requested: {len(rows) - i} posting(s) stay unscored for the next run (what was scored is saved)")
+            break
         batch = rows[i:i + batch_size]
         log(f"  scoring {i + 1}-{i + len(batch)} of {len(rows)}...")
         rep.calls += 1

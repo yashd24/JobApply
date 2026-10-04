@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """python run.py: find, filter, score, approve the best and process them, with nobody at the keyboard.
 
-    python run.py                  the whole unattended flow (this is what the daily scheduled task runs)
+    python run.py                  the whole unattended flow (start it yourself, or with `jobapply`)
     python run.py --dry-run        discover, filter and score for real, then show what WOULD be approved; nothing is
                                    approved, processed or submitted
     python run.py --skip-discovery use the postings already found (score, approve, process)
@@ -40,6 +40,7 @@ from jobbot import config as cfgmod
 from jobbot import discovery as D
 from jobbot import profile as P
 from jobbot import boardcheck, relevance, sheets
+from jobbot import stopflag
 from jobbot import tracker as T
 
 ROOT = Path(__file__).resolve().parent
@@ -56,7 +57,7 @@ def runs_dir() -> Path:
 
 
 class Lock:
-    """output/run.lock: two scheduled runs must not overlap (they would share the browser profile and the daily cap)."""
+    """output/run.lock: two runs must not overlap (they would share the browser profile and the daily cap)."""
 
     def __init__(self, path: Path, now=time.time):
         self.path, self.now = path, now
@@ -151,7 +152,8 @@ def format_scored(rows, threshold: int, cfg: "dict | None" = None) -> str:
 
 def run_all(cfg: dict, tr: "T.Tracker", *, dry_run: bool = False, skip_discovery: bool = False, discover_fn=None, llm=None,
             profile_loader=None, resume_loader=None, process=None, sync_fn=None, sleep=time.sleep,
-            rng: "random.Random | None" = None, now=datetime.now, log=print, fetch_text=None, board_http=None) -> dict:
+            rng: "random.Random | None" = None, now=datetime.now, log=print, fetch_text=None, board_http=None,
+            should_stop=None) -> dict:
     """The whole flow. Returns the run summary. A Claude usage limit ends the Claude steps cleanly (the rest still
     happens: sheet sync, summary); a problem in one step is recorded and does not abort the others."""
     started = now()
@@ -165,6 +167,17 @@ def run_all(cfg: dict, tr: "T.Tracker", *, dry_run: bool = False, skip_discovery
                "approved": 0, "submitted": 0, "ready_for_you": 0, "needs_review": 0, "manual": 0, "failed": 0,
                "stopped": "", "errors": [], "jobs": [], "threshold": threshold}
 
+    def stop_asked() -> bool:
+        """True once you asked for a clean stop (jobapply stop / Ctrl+C); the reason is recorded once."""
+        if should_stop and should_stop():
+            if not s["stopped"]:
+                s["stopped"] = (stopflag.STOP_WORDS + ": paid work already done is saved; run again and it continues "
+                                "(approved jobs first, then unscored postings)")
+                log("")
+                log(s["stopped"])
+            return True
+        return False
+
     def usage_limit(e) -> None:
         s["stopped"] = (f"Claude's usage limit was reached ({str(e)[:120]}): the Claude steps stopped; run again after the "
                         "reset and it continues (approved jobs resume first, unscored postings are scored next)")
@@ -174,7 +187,7 @@ def run_all(cfg: dict, tr: "T.Tracker", *, dry_run: bool = False, skip_discovery
     if not skip_discovery:
         log("1/5 Discovering and filtering (no Claude usage)...")
         try:
-            disc = (discover_fn or (lambda: D.discover(D.load_settings(cfg), tr, log=log)))()
+            disc = (discover_fn or (lambda: D.discover(D.load_settings(cfg), tr, log=log, should_stop=should_stop)))()
             s["scraped"] = disc.scraped
             s["dropped"] = {k: len(v) for k, v in disc.dropped.items()}
             s["found_new"] = disc.saved.get("new", 0) + disc.saved.get("replaced", 0)
@@ -210,12 +223,13 @@ def run_all(cfg: dict, tr: "T.Tracker", *, dry_run: bool = False, skip_discovery
             s["errors"].append(f"descriptions: {type(e).__name__}: {str(e)[:160]}")
 
     # 3. relevance score (one Claude call per 10 postings)
-    todo = len(tr.unscored())
+    stop_asked()
+    todo = 0 if s["stopped"] else len(tr.unscored())
     log(f"3/6 Scoring {todo} posting(s) that have no relevance score yet (one Claude call per 10)...")
     if todo:
         try:
             rep = relevance.score_unscored(tr, llm, resume_loader(), profile_loader(), log=log,
-                                           rules=relevance.rules_from_config(cfg))
+                                           rules=relevance.rules_from_config(cfg), should_stop=should_stop)
             s["scored"] = rep.scored
             s["errors"] += rep.problems
         except tailor.UsageLimitError as e:
@@ -224,6 +238,7 @@ def run_all(cfg: dict, tr: "T.Tracker", *, dry_run: bool = False, skip_discovery
             s["errors"].append(f"scoring: {type(e).__name__}: {str(e)[:160]}")
             log(f"  scoring failed: {s['errors'][-1]}")
     s["unscored_left"] = len(tr.unscored())
+    stop_asked()
     try:                          # a changed scoring rule applies to scores already stored, with no Claude usage
         s["recapped"] = len(relevance.recap_found(tr, relevance.rules_from_config(cfg), log=log))
     except Exception as e:
@@ -259,7 +274,7 @@ def run_all(cfg: dict, tr: "T.Tracker", *, dry_run: bool = False, skip_discovery
         log(f"6/6 Processing {len(tr.approved())} approved job(s), one at a time...")
         process = process or batch.make_processor(tr, cfg, unattended=True, greenhouse_mode=greenhouse_mode_of(cfg),
                                                   profile_loader=profile_loader, resume_loader=resume_loader)
-        rep = batch.run_batch(tr, cfg, settings, process=process, sleep=sleep, rng=rng, log=log)
+        rep = batch.run_batch(tr, cfg, settings, process=process, sleep=sleep, rng=rng, log=log, should_stop=should_stop)
         for jid, company, role, outcome in rep.done:
             row = tr.by_ids([jid])
             s[outcome if outcome in ("submitted", "ready_for_you", "needs_review", "manual", "failed") else "failed"] += 1
@@ -268,6 +283,7 @@ def run_all(cfg: dict, tr: "T.Tracker", *, dry_run: bool = False, skip_discovery
         if rep.stopped:
             s["stopped"] = rep.stopped
             log(f"\n{rep.stopped}")
+        stop_asked()
     else:
         log("5/6 Approval and processing skipped: " + s["stopped"])
 
@@ -338,7 +354,7 @@ def format_summary(s: dict) -> str:
 
 
 class Tee:
-    """Print to the console and to the day's log file, so a scheduled run leaves a record."""
+    """Print to the console and to the day's log file, so every run leaves a record."""
 
     def __init__(self, stream, path: Path):
         self.stream, self.file = stream, open(path, "a", encoding="utf-8")
@@ -355,6 +371,33 @@ class Tee:
         self.file.close()
 
 
+def install_stop_signals():
+    """First Ctrl+C asks for a clean stop (same as `jobapply stop`); a second one aborts at once. Ctrl+Break aborts at
+    once too (jobapply sends it on a second Ctrl+C). Returns a function that puts the old handlers back."""
+    import signal
+    import threading
+    if threading.current_thread() is not threading.main_thread():
+        return lambda: None
+    asked = []
+
+    def on_interrupt(signum, frame):
+        if asked:
+            raise KeyboardInterrupt
+        asked.append(1)
+        stopflag.request("Ctrl+C")
+        print("\nCtrl+C: stopping cleanly. The job in progress is finished and saved, then the run exits and the next run "
+              "continues from there. Press Ctrl+C again to abort at once (the job in progress may be repeated).")
+
+    old = {signal.SIGINT: signal.signal(signal.SIGINT, on_interrupt)}
+    if hasattr(signal, "SIGBREAK"):
+        old[signal.SIGBREAK] = signal.signal(signal.SIGBREAK, signal.default_int_handler)
+
+    def restore():
+        for sig, handler in old.items():
+            signal.signal(sig, handler)
+    return restore
+
+
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser(description="The whole unattended flow: discover, score, approve, process, sync.")
     ap.add_argument("--dry-run", action="store_true", help="discover, filter and score, then show what would be approved")
@@ -363,15 +406,23 @@ def main(argv=None) -> int:
     runs_dir().mkdir(parents=True, exist_ok=True)
     tee = Tee(sys.stdout, runs_dir() / f"{datetime.now():%Y-%m-%d}.log")
     real_stdout, sys.stdout = sys.stdout, tee
+    restore_signals, holds_lock = (lambda: None), False        # noqa: E731
     try:
         print(f"\n===== run.py {datetime.now():%Y-%m-%d %H:%M:%S}{' (dry run)' if args.dry_run else ''} =====")
         cfg = cfgmod.load_config(apply.CONFIG_FILE)
         with Lock(tailor.OUTPUT_DIR / "run.lock"), T.Tracker(apply._tracker_file()) as tr:
-            summary = run_all(cfg, tr, dry_run=args.dry_run, skip_discovery=args.skip_discovery)
+            stopflag.clear()                                   # a stop asked for before this run began is not for it
+            holds_lock = True
+            restore_signals = install_stop_signals()
+            summary = run_all(cfg, tr, dry_run=args.dry_run, skip_discovery=args.skip_discovery,
+                              should_stop=stopflag.requested)
             path = write_summary(summary)
             print("\n" + format_summary(summary))
             print(f"\n(run summary: {path})")
         return 0
+    except KeyboardInterrupt:
+        print("\nAborted at once. Anything already saved is kept; a job that was in progress may be repeated next time.")
+        return 130
     except AlreadyRunning as e:
         print(f"Not started: {e}")
         return 3
@@ -379,6 +430,9 @@ def main(argv=None) -> int:
         print(f"{type(e).__name__}: {e}")
         return 2
     finally:
+        restore_signals()
+        if holds_lock:                                          # never clear another run's stop request
+            stopflag.clear()
         sys.stdout = real_stdout
         tee.close()
 

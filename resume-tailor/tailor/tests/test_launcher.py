@@ -1,5 +1,5 @@
-"""The `jobapply` command: argument handling, the action list, the log, the scheduled-task switch and the closing summary.
-Nothing here runs the real flow, touches the real tracker or the real scheduled task."""
+"""The `jobapply` command: argument handling, the action list, the log and the closing summary.
+Nothing here runs the real flow or touches the real tracker."""
 import io
 import json
 import sys
@@ -35,8 +35,7 @@ class Parse(unittest.TestCase):
     def test_the_other_words(self):
         self.assertEqual(L.parse(["action"]).kind, "action")
         self.assertEqual(L.parse(["log"]).kind, "log")
-        self.assertEqual((L.parse(["stop"]).kind, L.parse(["stop"]).enable), ("task", False))
-        self.assertEqual((L.parse(["start"]).kind, L.parse(["start"]).enable), ("task", True))
+        self.assertEqual(L.parse(["stop"]).kind, "stop")
         for word in ("help", "-h", "--help", "/?", "?"):
             self.assertEqual(L.parse([word]).kind, "help", word)
 
@@ -49,8 +48,14 @@ class Parse(unittest.TestCase):
         self.assertEqual(L.parse(["--dry-run", "--skip-discovery"]), L.Plan("run", ["--dry-run", "--skip-discovery"]))
         self.assertEqual(L.parse(["something", "else"]), L.Plan("run", ["something", "else"]))     # run.py will complain
 
+    def test_start_is_gone_and_there_is_no_scheduled_task(self):
+        self.assertEqual(L.parse(["start"]), L.Plan("run", ["start"]))              # not a word any more: run.py rejects it
+        self.assertNotIn("jobapply start", L.HELP)
+        self.assertFalse(hasattr(L, "set_task"))
+        self.assertNotIn("schtasks", (ROOT / "jobbot" / "launcher.py").read_text(encoding="utf-8"))
+
     def test_help_lists_every_command(self):
-        for word in ("dry", "status", "sync", "action", "log", "stop", "start", "help"):
+        for word in ("dry", "status", "sync", "action", "log", "stop", "help"):
             self.assertIn(f"jobapply {word}", L.HELP)
 
 
@@ -58,8 +63,9 @@ class Main(unittest.TestCase):
     def go(self, argv, code=0, summary=None):
         calls = []
         with mock.patch.object(L, "run_module", lambda name, args: calls.append((name, args)) or code), \
+                mock.patch.object(L, "run_worker", lambda args: calls.append(("run", args)) or code), \
                 mock.patch.object(L, "newest_summary", lambda since: summary), \
-                mock.patch.object(L, "set_task", lambda enable: calls.append(("task", enable)) or 0), \
+                mock.patch.object(L, "stop_run", lambda: calls.append(("stop", None)) or 0), \
                 redirect_stdout(io.StringIO()) as out:
             rc = L.main(argv)
         return rc, calls, out.getvalue()
@@ -69,8 +75,7 @@ class Main(unittest.TestCase):
         self.assertEqual(self.go(["dry"])[1], [("run", ["--dry-run"])])
         self.assertEqual(self.go(["status", "3"])[1], [("apply", ["--status", "3"])])
         self.assertEqual(self.go(["sync"])[1], [("apply", ["--sync-sheet"])])
-        self.assertEqual(self.go(["stop"])[1], [("task", False)])
-        self.assertEqual(self.go(["start"])[1], [("task", True)])
+        self.assertEqual(self.go(["stop"])[1], [("stop", None)])
 
     def test_a_run_ends_with_the_summary_and_keeps_its_exit_code(self):
         s = {"date": "2030-01-02", "dry_run": False, "found_new": 12, "scored": 40, "submitted": 1, "ready_for_you": 2,
@@ -167,7 +172,7 @@ class Action(unittest.TestCase):
             self.assertIn("Nothing needs you", out.getvalue())
 
 
-class LogAndTask(unittest.TestCase):
+class Log(unittest.TestCase):
     def test_the_log_opens_only_when_today_has_one(self):
         with tempfile.TemporaryDirectory() as d, mock.patch.object(tailor, "OUTPUT_DIR", Path(d)):
             opened = []
@@ -181,30 +186,6 @@ class LogAndTask(unittest.TestCase):
             with redirect_stdout(io.StringIO()):
                 self.assertEqual(L.open_log(opened.append), 0)
             self.assertEqual(opened, [str(path)])
-
-    def test_stop_and_start_change_the_named_task(self):
-        seen = []
-
-        def fake(cmd, **kw):
-            seen.append(cmd)
-            return SimpleNamespace(returncode=0, stdout="SUCCESS", stderr="")
-
-        with redirect_stdout(io.StringIO()) as out:
-            self.assertEqual(L.set_task(False, fake), 0)
-            self.assertEqual(L.set_task(True, fake), 0)
-        self.assertEqual(seen[0], ["schtasks", "/Change", "/TN", "JobApply daily run", "/DISABLE"])
-        self.assertEqual(seen[1], ["schtasks", "/Change", "/TN", "JobApply daily run", "/ENABLE"])
-        self.assertIn("disabled", out.getvalue())
-        self.assertIn("enabled", out.getvalue())
-
-    def test_a_missing_task_is_explained_not_a_traceback(self):
-        def fake(cmd, **kw):
-            return SimpleNamespace(returncode=1, stdout="", stderr="ERROR: The specified task name does not exist")
-
-        with redirect_stdout(io.StringIO()) as out:
-            self.assertEqual(L.set_task(False, fake), 1)
-        self.assertIn("Could not disable", out.getvalue())
-        self.assertIn("does not exist", out.getvalue())
 
 
 class Launcher(unittest.TestCase):

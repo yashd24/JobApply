@@ -199,15 +199,22 @@ class Report:
         return out or ["  (nothing was processed)"]
 
 
+STOPPED_BY_YOU = ("stopped at your request: the job in progress was finished and saved; the rest stay approved and the "
+                  "next run continues with them")
+
+
 def run_batch(tr: "T.Tracker", cfg: dict, settings: Settings, *, process=None, only: "list[int] | None" = None,
               limit: "int | None" = None, sleep=time.sleep, rng: "random.Random | None" = None, now=datetime.now,
-              log=print) -> Report:
+              log=print, should_stop=None) -> Report:
     rng = rng or random.Random()
     process = process or make_processor(tr, cfg)
     queue = [r for r in tr.approved() if only is None or r["id"] in only]
     rep = Report(left=len(queue))
     started = 0
     for row in queue:
+        if should_stop and should_stop():
+            rep.stopped = STOPPED_BY_YOU
+            break
         if limit is not None and started >= limit:
             rep.stopped = f"--limit {limit} reached"
             break
@@ -219,7 +226,16 @@ def run_batch(tr: "T.Tracker", cfg: dict, settings: Settings, *, process=None, o
         if started:
             wait = rng.uniform(*settings.delay_s)
             log(f"  waiting {wait:.0f}s before the next job...")
-            sleep(wait)
+            if should_stop:                                   # wait in short steps so a stop request is not left waiting
+                left = wait
+                while left > 0 and not should_stop():
+                    sleep(min(3.0, left))
+                    left -= 3.0
+                if should_stop():
+                    rep.stopped = STOPPED_BY_YOU
+                    break
+            else:
+                sleep(wait)
         log(f"\n[{started + 1}/{len(queue)}] #{row['id']} {row['company']} | {row['role']}  "
             f"({discovery.route_label(row, cfg)})")
         lid = tr.batch_start(row["id"])

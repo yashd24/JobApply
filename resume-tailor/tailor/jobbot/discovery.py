@@ -480,7 +480,7 @@ def _jobspy():
 
 def run_searches(s: Settings, scrape_fn: "Callable | None" = None, sleep: Callable = time.sleep,
                  log: Callable = print, only_terms: "list[str] | None" = None, results: "int | None" = None,
-                 rng: "random.Random | None" = None) -> "tuple[list[tuple[str, dict, bool]], list[str]]":
+                 rng: "random.Random | None" = None, should_stop: "Callable | None" = None) -> "tuple[list[tuple[str, dict, bool]], list[str]]":
     """[(search label, raw row, was it a city search)], [errors]. One scrape_jobs call per term x location; a failing call is recorded and the
     rest continue. A pause between calls keeps the sites from rate-limiting."""
     scrape_fn = scrape_fn or _jobspy()
@@ -488,6 +488,9 @@ def run_searches(s: Settings, scrape_fn: "Callable | None" = None, sleep: Callab
     rows, errors = [], []
     plan = [(t, loc) for t in (only_terms or s.terms) for loc in s.locations]
     for i, (term, loc) in enumerate(plan, 1):
+        if should_stop and should_stop():
+            log(f"  stop requested: {len(plan) - i + 1} search(es) skipped; what was found so far is kept")
+            break
         label = f"{term} @ {loc.name}"
         log(f"  [{i}/{len(plan)}] {label}  ({', '.join(s.sites)})")
         try:
@@ -611,10 +614,10 @@ class Report:
 def discover(s: Settings, tracker: "T.Tracker | None", *, scrape_fn: "Callable | None" = None,
              fetch: Callable = default_fetch, sleep: Callable = time.sleep, today: "date | None" = None,
              log: Callable = print, only_terms: "list[str] | None" = None, results: "int | None" = None,
-             dry_run: bool = False) -> Report:
+             dry_run: bool = False, should_stop: "Callable | None" = None) -> Report:
     today = today or date.today()
     rep = Report()
-    raw, rep.errors = run_searches(s, scrape_fn, sleep, log, only_terms, results)
+    raw, rep.errors = run_searches(s, scrape_fn, sleep, log, only_terms, results, should_stop=should_stop)
     rep.scraped = len(raw)
 
     # 1. cheap filters, in order, each with its reason
