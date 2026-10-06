@@ -1,5 +1,6 @@
 """Cover-letter style rules added 2026-10-02: no repeated openers, no announced links, no broadening of the JD,
 and the user's own letter as the main style model (never copied)."""
+import os
 import sys
 import tempfile
 import unittest
@@ -7,6 +8,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
+os.environ.setdefault("JOBBOT_NO_SHEET", "1")      # a test must never reach the real Google Sheet
 sys.path.insert(0, str(ROOT / "tests"))
 
 import persona  # noqa: E402

@@ -1,6 +1,7 @@
 """Prepare mode: answers + a copy-ready sheet, the job opened in the DEFAULT browser, a manual-submission record.
 No automation browser is started in any of these tests; nothing leaves the machine."""
 import json
+import os
 import sys
 import tempfile
 import unittest
@@ -11,6 +12,7 @@ import yaml
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
+os.environ.setdefault("JOBBOT_NO_SHEET", "1")      # a test must never reach the real Google Sheet
 sys.path.insert(0, str(ROOT / "tests"))
 
 import persona  # noqa: E402

@@ -1,5 +1,6 @@
 """M7 tracker: SQLite from job folders, submitted sticks, dedupe, and the status table."""
 import json
+import os
 import sys
 import tempfile
 import unittest
@@ -7,6 +8,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
+os.environ.setdefault("JOBBOT_NO_SHEET", "1")      # a test must never reach the real Google Sheet
 
 from jobbot import tracker as T  # noqa: E402
 

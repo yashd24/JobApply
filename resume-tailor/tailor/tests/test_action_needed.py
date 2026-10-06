@@ -2,6 +2,7 @@
 job-folder columns, the "Action needed" tab and its "Mark applied" checkbox."""
 import json
 import sqlite3
+import os
 import sys
 import tempfile
 import unittest
@@ -10,6 +11,7 @@ from unittest import mock
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
+os.environ.setdefault("JOBBOT_NO_SHEET", "1")      # a test must never reach the real Google Sheet
 sys.path.insert(0, str(ROOT / "tests"))
 
 from jobbot import sheets as S  # noqa: E402

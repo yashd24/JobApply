@@ -2,6 +2,7 @@
 the CLI. A fake scrape function stands in for JobSpy and a fake fetch for link resolution: no network, no Claude."""
 import json
 import sqlite3
+import os
 import sys
 import tempfile
 import unittest
@@ -11,6 +12,7 @@ from unittest import mock
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
+os.environ.setdefault("JOBBOT_NO_SHEET", "1")      # a test must never reach the real Google Sheet
 sys.path.insert(0, str(ROOT / "tests"))
 
 import persona  # noqa: E402
@@ -661,7 +663,7 @@ class TrackerFlow(unittest.TestCase):
         self.assertEqual(out["approved"], [self.ids["A"], self.ids["B"], self.ids["C"]])
         self.assertNotIn("manual", out)
         self.assertEqual(out["ignored"], [9999])
-        self.assertEqual([r["company"] for r in self.t.approved()], ["A", "B", "C"])
+        self.assertEqual([r["company"] for r in self.t.approved()], ["C", "B", "A"])           # no scores: the newest first
         self.assertEqual(self.t.found(), [])
         again = self.t.decide([self.ids["A"]], approve=True)                                # already decided
         self.assertEqual(again["ignored"], [self.ids["A"]])
@@ -691,7 +693,7 @@ class TrackerFlow(unittest.TestCase):
         self.assertEqual((sheet.row(2)[1], sheet.row(2)[3]), ("Approved", "A"))             # approved: in the sheet
         self.assertEqual(sheet.row(3)[1], "Manual")
         self.assertEqual(sheet.row(3)[6], "https://in.indeed.com/viewjob?jk=1")
-        self.assertEqual(sheet.row(4), [""] * 20)                                            # the skipped one is not there
+        self.assertEqual(sheet.row(4), [""] * 22)                                            # the skipped one is not there
 
     def test_an_old_database_is_migrated_in_place(self):
         old = Path(self.tmp.name) / "old.sqlite3"

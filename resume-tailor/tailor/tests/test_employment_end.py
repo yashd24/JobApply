@@ -1,6 +1,7 @@
 """Date-driven change: from the day AFTER profile.employment.last_working_day the current job is in the past.
 Resume dates close, cover letters use the past tense, and the bullets are checked for present-tense wording.
 Every test uses made-up dates (read from a profile), never the real one, and checks both sides of the boundary."""
+import os
 import sys
 import tempfile
 import unittest
@@ -12,6 +13,7 @@ import yaml
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
+os.environ.setdefault("JOBBOT_NO_SHEET", "1")      # a test must never reach the real Google Sheet
 sys.path.insert(0, str(ROOT / "tests"))
 
 import persona  # noqa: E402

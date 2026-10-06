@@ -1,6 +1,7 @@
 """A clean stop: `jobapply stop` / Ctrl+C finishes and saves the job in progress, updates the tracker and exits, and the
 next run continues from what is saved. Everything is faked: no Claude, no browser, no real run."""
 import io
+import os
 import sys
 import tempfile
 import unittest
@@ -11,6 +12,7 @@ from unittest import mock
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
+os.environ.setdefault("JOBBOT_NO_SHEET", "1")      # a test must never reach the real Google Sheet
 sys.path.insert(0, str(ROOT / "tests"))
 
 import batch  # noqa: E402
@@ -143,7 +145,7 @@ class InTheFlow(Base):
             asked.append(1)                                                   # the stop request arrives during job A
             self.tr.set_state(row["id"], "ready_for_you", "ready")
             return "ready_for_you"
-        s = self.go(process=process, should_stop=lambda: bool(asked))
+        s = self.go(process=process, should_stop=lambda: bool(asked), llm=self.scorer({"A": 9, "B": 8, "C": 7}))
         self.assertEqual([x for x in self.steps if x.startswith("process")], ["process A"])
         self.assertEqual(self.row(ids[0])["status"], "ready_for_you")        # finished and saved
         self.assertEqual({self.row(i)["status"] for i in ids[1:]}, {"approved"})   # not started: resume tomorrow
@@ -160,7 +162,7 @@ class InTheFlow(Base):
             asked.append(1)
             self.tr.set_state(row["id"], "ready_for_you", "ready")
             return "ready_for_you"
-        self.go(process=process, should_stop=lambda: bool(asked))
+        self.go(process=process, should_stop=lambda: bool(asked), llm=self.scorer({"A": 9, "B": 8}))
         self.steps.clear()
         s = self.go()                                                         # the next run, no stop request
         self.assertNotIn("score", self.steps)                                 # the scores were saved

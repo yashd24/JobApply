@@ -4,6 +4,7 @@ All values below belong to a fictional "Test User" (made-up company, marks, sala
 Never put real profile values in tests: profile.yaml is gitignored, tests are committed.
 """
 import copy
+import os
 import sys
 import unittest
 from datetime import date
@@ -13,6 +14,7 @@ import yaml
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
+os.environ.setdefault("JOBBOT_NO_SHEET", "1")      # a test must never reach the real Google Sheet
 
 from jobbot import profile as P  # noqa: E402
 

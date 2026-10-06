@@ -13,6 +13,7 @@ from unittest import mock
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
+os.environ.setdefault("JOBBOT_NO_SHEET", "1")      # a test must never reach the real Google Sheet
 sys.path.insert(0, str(ROOT / "tests"))
 
 import apply  # noqa: E402
@@ -205,12 +206,12 @@ class Stops(Base):
             err = tailor.UsageLimitError("limit")
             err.job_dir = folder
             raise err
-        s = self.go(process=process)
+        s = self.go(process=process, llm=self.scorer({"A": 9, "B": 8}))
         self.assertIn("usage limit", s["stopped"])
         a = self.row(ids[0])
         self.assertEqual((a["status"], a["job_folder"]), ("approved", str(folder)))
         self.steps.clear()
-        self.go(llm=self.scorer())                                                      # next run: A first, then B
+        self.go(llm=self.scorer())                                                      # next run: the higher score (A) first, then B
         self.assertEqual([x for x in self.steps if x.startswith("process")], ["process A", "process B"])
 
     def test_discovery_failing_does_not_stop_scoring_or_processing(self):

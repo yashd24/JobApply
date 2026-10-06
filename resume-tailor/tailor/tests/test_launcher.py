@@ -2,6 +2,7 @@
 Nothing here runs the real flow or touches the real tracker."""
 import io
 import json
+import os
 import sys
 import tempfile
 import time
@@ -13,6 +14,7 @@ from unittest import mock
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
+os.environ.setdefault("JOBBOT_NO_SHEET", "1")      # a test must never reach the real Google Sheet
 
 import tailor  # noqa: E402
 from jobbot import launcher as L  # noqa: E402

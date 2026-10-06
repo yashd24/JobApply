@@ -1,6 +1,7 @@
 """M3 browser session, against real headless Chromium and a local HTTP server. Dirs contain spaces on
 purpose (the user's Windows profile path has one)."""
 import http.server
+import os
 import sys
 import tempfile
 import threading
@@ -10,6 +11,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
+os.environ.setdefault("JOBBOT_NO_SHEET", "1")      # a test must never reach the real Google Sheet
 
 try:
     from playwright.sync_api import sync_playwright

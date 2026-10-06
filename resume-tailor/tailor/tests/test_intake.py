@@ -5,12 +5,14 @@ tests/fixtures/real/<name>/urls.json   real postings saved with
                             `python -m jobbot.intake <url> --save-fixture tests/fixtures/real/<name>`
 """
 import json
+import os
 import sys
 import unittest
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
+os.environ.setdefault("JOBBOT_NO_SHEET", "1")      # a test must never reach the real Google Sheet
 
 from jobbot import intake as I  # noqa: E402
 

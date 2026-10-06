@@ -35,7 +35,7 @@ import apply
 import tailor
 from jobbot import answers as A
 from jobbot import config as cfgmod
-from jobbot import coverletter, discovery, intake, prepare
+from jobbot import coverletter, discovery, intake, prepare, sheets, stopflag
 from jobbot import profile as P
 from jobbot import tracker as T
 
@@ -248,7 +248,7 @@ def run_batch(tr: "T.Tracker", cfg: dict, settings: Settings, *, process=None, o
                          "again after the reset", folder)
             tr.batch_finish(lid, "usage_limit")
             rep.stopped = (f"Claude's usage limit was reached while working on #{row['id']}. Nothing is lost: wait for the "
-                           "reset, then run `python batch.py` again; it resumes this job first.")
+                           "reset, then run `jobapply process` again; this job continues from its saved folder when its turn comes.")
             break
         except StopBatch as e:
             tr.batch_finish(lid, "stopped")
@@ -267,16 +267,40 @@ def run_batch(tr: "T.Tracker", cfg: dict, settings: Settings, *, process=None, o
 
 
 def format_queue(tr: "T.Tracker", cfg: dict, settings: Settings) -> str:
+    """The queue in the order it will be worked: best score first (ties: newest). The first jobs that still fit in today's
+    cap are marked `today`; the rest wait for a later day."""
     rows = tr.approved()
     used = tr.batch_count_today()
-    head = (f"{len(rows)} approved job(s) waiting; {used}/{settings.daily_cap} started today; "
-            f"{settings.delay_s[0]:.0f}-{settings.delay_s[1]:.0f}s between jobs.")
-    lines = [head]
-    for r in rows:
-        resume = "  [resumes: folder kept]" if r["job_folder"] else ""
-        lines.append(f"  #{r['id']:<4} {(r['company'] or '')[:24]:<24} {(r['role'] or '')[:36]:<36} "
-                     f"{discovery.route_label(r, cfg)}{resume}")
+    room = max(settings.daily_cap - used, 0)
+    head = (f"{len(rows)} approved job(s) waiting, best score first; {used}/{settings.daily_cap} started today "
+            f"({room} left); {settings.delay_s[0]:.0f}-{settings.delay_s[1]:.0f}s between jobs.")
+    lines = [head, f"  {'#ID':<6}{'SCORE':>5}  {'COMPANY':<24} {'ROLE':<36} {'ROUTE':<20} WHEN"]
+    for n, r in enumerate(rows):
+        resume = " (resumes: folder kept)" if r["job_folder"] else ""
+        score = "-" if r["relevance"] is None else r["relevance"]
+        lines.append(f"  #{r['id']:<5}{score!s:>5}  {(r['company'] or '')[:24]:<24} {(r['role'] or '')[:36]:<36} "
+                     f"{discovery.route_label(r, cfg):<20} {'today' if n < room else 'later'}{resume}")
     return "\n".join(lines)
+
+
+def sheet_approvals(log=print, tr: "T.Tracker | None" = None) -> list:
+    """Read the Approve ticks in the Google Sheet (if it is configured and authorised) and mark those Found postings
+    approved in the tracker, BEFORE the queue is read. Never fails the caller: a sheet problem is a printed warning."""
+    try:
+        client = apply._sheet_client()
+        if not client:
+            return []
+        if tr is not None:
+            ids = sheets.consume_approvals(tr, client)
+        else:
+            with T.Tracker(apply._tracker_file()) as t:
+                ids = sheets.consume_approvals(t, client)
+        if ids:
+            log(f"Approved from the sheet's Approve ticks: {', '.join('#' + str(i) for i in ids)}")
+        return ids
+    except Exception as e:
+        log(f"(could not read the Approve ticks from the sheet: {type(e).__name__}: {str(e)[:140]})")
+        return []
 
 
 def main() -> int:
@@ -291,23 +315,45 @@ def main() -> int:
         settings = load_settings(cfg)
         if args.delay is not None:
             settings.delay_s = (args.delay, args.delay)
-        with T.Tracker(apply._tracker_file()) as tr:
-            if args.list:
+        if args.list:
+            with T.Tracker(apply._tracker_file()) as tr:
                 print(format_queue(tr, cfg, settings))
-                return 0
-            only = [int(x) for x in re.split(r"[,\s]+", args.only.strip()) if x] if args.only else None
-            print(format_queue(tr, cfg, settings))
-            rep = run_batch(tr, cfg, settings, only=only, limit=args.limit)
-            print("\nDone:")
-            print("\n".join(rep.lines()))
-            if rep.stopped:
-                print(f"\n{rep.stopped}")
-            print(f"{rep.left} approved job(s) still waiting.")
-            ready = len(tr.action_needed())
-            if ready:
-                print(f"{ready} posting(s) are waiting on you (python apply.py --status, or the Action needed tab).")
+            return 0
+        only = [int(x) for x in re.split(r"[,\s]+", args.only.strip()) if x] if args.only else None
+        restore, holds = (lambda: None), False
+        try:
+            with stopflag.Lock(tailor.OUTPUT_DIR / "run.lock"):
+                holds = True
+                stopflag.clear()                                   # a stop asked for before this began is not for it
+                restore = stopflag.install_stop_signals()
+                sheet_approvals()
+                return _process(cfg, settings, only, args.limit)
+        except stopflag.AlreadyRunning as e:
+            print(f"Not started: {e}")
+            return 3
+        except KeyboardInterrupt:
+            print("\n" "Aborted at once. Anything already saved is kept; a job that was in progress may be repeated next time.")
+            return 130
+        finally:
+            restore()
+            if holds:
+                stopflag.clear()
     except (cfgmod.ConfigError, ValueError) as e:
         sys.exit(f"{type(e).__name__}: {e}")
+
+
+def _process(cfg: dict, settings, only, limit) -> int:
+    with T.Tracker(apply._tracker_file()) as tr:
+        print(format_queue(tr, cfg, settings))
+        rep = run_batch(tr, cfg, settings, only=only, limit=limit, should_stop=stopflag.requested)
+        print("\n" "Done:")
+        print("\n".join(rep.lines()))
+        if rep.stopped:
+            print(f"\n{rep.stopped}")
+        print(f"{rep.left} approved job(s) still waiting.")
+        ready = len(tr.action_needed())
+        if ready:
+            print(f"{ready} posting(s) are waiting on you (jobapply action, or the Action needed tab).")
     return 0
 
 

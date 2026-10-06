@@ -1,5 +1,6 @@
 """Relevance scoring: one Claude call per 10 postings, validated by code, stored in the tracker. A fake Claude stands in."""
 import json
+import os
 import sys
 import tempfile
 import unittest
@@ -7,6 +8,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
+os.environ.setdefault("JOBBOT_NO_SHEET", "1")      # a test must never reach the real Google Sheet
 sys.path.insert(0, str(ROOT / "tests"))
 
 import persona  # noqa: E402

@@ -41,40 +41,15 @@ from jobbot import discovery as D
 from jobbot import profile as P
 from jobbot import boardcheck, relevance, sheets
 from jobbot import stopflag
+from jobbot.stopflag import LOCK_MAX_AGE_S, AlreadyRunning, Lock, install_stop_signals  # noqa: F401
 from jobbot import tracker as T
 
 ROOT = Path(__file__).resolve().parent
-LOCK_MAX_AGE_S = 8 * 3600
 DEFAULT_THRESHOLD = 7
-
-
-class AlreadyRunning(Exception):
-    pass
 
 
 def runs_dir() -> Path:
     return tailor.OUTPUT_DIR / "runs"
-
-
-class Lock:
-    """output/run.lock: two runs must not overlap (they would share the browser profile and the daily cap)."""
-
-    def __init__(self, path: Path, now=time.time):
-        self.path, self.now = path, now
-
-    def __enter__(self):
-        self.path.parent.mkdir(parents=True, exist_ok=True)
-        if self.path.exists() and self.now() - self.path.stat().st_mtime < LOCK_MAX_AGE_S:
-            raise AlreadyRunning(f"another run started {int((self.now() - self.path.stat().st_mtime) / 60)} minutes ago and "
-                                 f"holds {self.path.name}. If it crashed, delete {self.path}.")
-        self.path.write_text(f"pid {os.getpid()} started {datetime.now().isoformat(timespec='seconds')}\n", encoding="utf-8")
-        return self
-
-    def __exit__(self, *exc):
-        try:
-            self.path.unlink()
-        except OSError:
-            pass
 
 
 def threshold_of(cfg: dict) -> int:
@@ -153,7 +128,7 @@ def format_scored(rows, threshold: int, cfg: "dict | None" = None) -> str:
 def run_all(cfg: dict, tr: "T.Tracker", *, dry_run: bool = False, skip_discovery: bool = False, discover_fn=None, llm=None,
             profile_loader=None, resume_loader=None, process=None, sync_fn=None, sleep=time.sleep,
             rng: "random.Random | None" = None, now=datetime.now, log=print, fetch_text=None, board_http=None,
-            should_stop=None) -> dict:
+            should_stop=None, find_only: bool = False, approvals_fn=None) -> dict:
     """The whole flow. Returns the run summary. A Claude usage limit ends the Claude steps cleanly (the rest still
     happens: sheet sync, summary); a problem in one step is recorded and does not abort the others."""
     started = now()
@@ -163,7 +138,7 @@ def run_all(cfg: dict, tr: "T.Tracker", *, dry_run: bool = False, skip_discovery
     settings, sel = batch.load_settings(cfg), selection_of(cfg)
     threshold = sel["threshold"]
     s: dict = {"date": started.strftime("%Y-%m-%d"), "started": started.isoformat(timespec="seconds"), "dry_run": dry_run,
-               "scraped": 0, "dropped": {}, "found_new": 0, "already_tracked": 0, "scored": 0, "unscored_left": 0,
+               "find_only": find_only, "approved_from_sheet": 0, "scraped": 0, "dropped": {}, "found_new": 0, "already_tracked": 0, "scored": 0, "unscored_left": 0,
                "approved": 0, "submitted": 0, "ready_for_you": 0, "needs_review": 0, "manual": 0, "failed": 0,
                "stopped": "", "errors": [], "jobs": [], "threshold": threshold}
 
@@ -259,7 +234,17 @@ def run_all(cfg: dict, tr: "T.Tracker", *, dry_run: bool = False, skip_discovery
     log("\n" + format_scored([r for r in found_rows if r["relevance"] is not None], threshold, cfg) + "\n")
 
     # 4. approve + process
-    if dry_run:
+    if not dry_run and not find_only and not s["stopped"]:        # the sheet's Approve ticks count before anything is approved
+        read_ticks = approvals_fn or (None if sync_fn else (lambda: batch.sheet_approvals(log, tr)))
+        if read_ticks:
+            try:
+                s["approved_from_sheet"] = len(read_ticks() or [])
+            except Exception as e:
+                s["errors"].append(f"sheet approvals: {type(e).__name__}: {str(e)[:120]}")
+    if find_only:
+        log("5/6 Find only: nothing is approved, processed or submitted. Review the list with `jobapply list`, then "
+            "`jobapply approve ...` and `jobapply process`.")
+    elif dry_run:
         would = tr.top_found(threshold, max(settings.daily_cap - tr.batch_count_today() - len(tr.approved()), 0))
         log(f"DRY RUN: would auto-approve {len(would)} posting(s) now (daily cap {settings.daily_cap}); nothing is approved, "
             "processed or submitted.")
@@ -302,6 +287,11 @@ def run_all(cfg: dict, tr: "T.Tracker", *, dry_run: bool = False, skip_discovery
         s["errors"].append(f"sheet: {type(e).__name__}: {str(e)[:160]}")
         log(f"  sheet not updated: {s['errors'][-1]}")
 
+    try:
+        s["found_waiting"] = len(tr.found())
+        s["found_at_threshold"] = len(tr.top_found(threshold, 10 ** 6))
+    except Exception:
+        pass
     s["finished"] = now().isoformat(timespec="seconds")
     try:
         discover_json = tailor.OUTPUT_DIR / "shortlist.json"
@@ -325,7 +315,8 @@ def write_summary(summary: dict) -> Path:
 
 def format_summary(s: dict) -> str:
     dropped = ", ".join(f"{k} {n}" for k, n in s["dropped"].items()) or "none"
-    lines = [f"RUN SUMMARY {s['date']}" + (" (DRY RUN: nothing approved, processed or submitted)" if s["dry_run"] else ""),
+    lines = [f"RUN SUMMARY {s['date']}" + (" (DRY RUN: nothing approved, processed or submitted)" if s["dry_run"] else
+                                                (" (FIND ONLY: nothing approved, processed or submitted)" if s.get("find_only") else "")),
              f"  found {s['found_new']} new (scraped {s['scraped']}; already tracked {s['already_tracked']})",
              f"  dropped by reason: {dropped}",
              f"  scored {s['scored']}" + (f" ({s['unscored_left']} still unscored)" if s["unscored_left"] else "") +
@@ -371,37 +362,12 @@ class Tee:
         self.file.close()
 
 
-def install_stop_signals():
-    """First Ctrl+C asks for a clean stop (same as `jobapply stop`); a second one aborts at once. Ctrl+Break aborts at
-    once too (jobapply sends it on a second Ctrl+C). Returns a function that puts the old handlers back."""
-    import signal
-    import threading
-    if threading.current_thread() is not threading.main_thread():
-        return lambda: None
-    asked = []
-
-    def on_interrupt(signum, frame):
-        if asked:
-            raise KeyboardInterrupt
-        asked.append(1)
-        stopflag.request("Ctrl+C")
-        print("\nCtrl+C: stopping cleanly. The job in progress is finished and saved, then the run exits and the next run "
-              "continues from there. Press Ctrl+C again to abort at once (the job in progress may be repeated).")
-
-    old = {signal.SIGINT: signal.signal(signal.SIGINT, on_interrupt)}
-    if hasattr(signal, "SIGBREAK"):
-        old[signal.SIGBREAK] = signal.signal(signal.SIGBREAK, signal.default_int_handler)
-
-    def restore():
-        for sig, handler in old.items():
-            signal.signal(sig, handler)
-    return restore
-
-
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser(description="The whole unattended flow: discover, score, approve, process, sync.")
     ap.add_argument("--dry-run", action="store_true", help="discover, filter and score, then show what would be approved")
     ap.add_argument("--skip-discovery", action="store_true", help="work from the postings already found")
+    ap.add_argument("--find-only", action="store_true",
+                    help="discover, filter and score new jobs and sync the sheet; approve and process nothing")
     args = ap.parse_args(argv)
     runs_dir().mkdir(parents=True, exist_ok=True)
     tee = Tee(sys.stdout, runs_dir() / f"{datetime.now():%Y-%m-%d}.log")
@@ -415,7 +381,7 @@ def main(argv=None) -> int:
             holds_lock = True
             restore_signals = install_stop_signals()
             summary = run_all(cfg, tr, dry_run=args.dry_run, skip_discovery=args.skip_discovery,
-                              should_stop=stopflag.requested)
+                              should_stop=stopflag.requested, find_only=args.find_only)
             path = write_summary(summary)
             print("\n" + format_summary(summary))
             print(f"\n(run summary: {path})")

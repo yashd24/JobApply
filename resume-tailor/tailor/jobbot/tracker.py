@@ -71,7 +71,8 @@ DISCOVERY_COLUMNS = {"route": "TEXT", "source": "TEXT", "source_url": "TEXT", "d
                      "experience_asked": "TEXT", "fingerprint": "TEXT", "date_posted": "TEXT", "last_seen": "TEXT",
                      "reason": "TEXT", "job_folder": "TEXT", "description": "TEXT",
                      "relevance": "INTEGER", "relevance_reason": "TEXT", "remote": "INTEGER",
-                     "route_evidence": "TEXT", "board_checked": "TEXT", "relevance_exceptional": "INTEGER"}
+                     "route_evidence": "TEXT", "board_checked": "TEXT", "relevance_exceptional": "INTEGER",
+                     "tick_ignored": "INTEGER"}
 _LEGAL_SUFFIX = re.compile(r"\b(pvt|private|ltd|limited|inc|llc|llp|corp|corporation|india|co)\b")
 
 
@@ -354,8 +355,32 @@ class Tracker:
         return "marked"
 
     def approved(self) -> list[sqlite3.Row]:
-        """Approved postings for the batch runner: ones with a saved job folder (a run stopped part-way) first."""
-        return self.db.execute("SELECT * FROM jobs WHERE status='approved' ORDER BY (job_folder IS NULL), id").fetchall()
+        """Approved postings in the order the batch runner takes them: the highest relevance score first, ties by the newest
+        posting (then the newest id); unscored ones last. The daily cap is spent from the top of this list."""
+        return self.db.execute("SELECT * FROM jobs WHERE status='approved' ORDER BY (relevance IS NULL), relevance DESC, "
+                               "COALESCE(date_posted, '') DESC, id DESC").fetchall()
+
+    def unapprove(self, ids: list[int]) -> dict:
+        """Move approved postings that nothing has been done for back to Found (NOT rejected: they can be approved again
+        and a later search does not drop them). One with a saved job folder has paid work in it and is kept approved.
+        The sheet's Approve tick is the user's: the posting is flagged so a tick that is still there does not approve it
+        again until it has been seen unticked once. Returns {"moved": [...], "kept": {id: why}, "ignored": {id: status}}."""
+        out: dict = {"moved": [], "kept": {}, "ignored": {}}
+        for r in self.by_ids(ids):
+            if r["status"] != "approved":
+                out["ignored"][r["id"]] = r["status"]
+            elif r["job_folder"]:
+                out["kept"][r["id"]] = "work was already started (its folder is saved): `jobapply process` finishes it"
+            else:
+                self.db.execute("UPDATE jobs SET status='found', reason=?, tick_ignored=1 WHERE id=?",
+                                ("moved back to Found with jobapply unapprove: not rejected", r["id"]))
+                out["moved"].append(r["id"])
+        self.db.commit()
+        return out
+
+    def clear_tick_ignored(self, job_id: int) -> None:
+        self.db.execute("UPDATE jobs SET tick_ignored=NULL WHERE id=?", (job_id,))
+        self.db.commit()
 
     def set_state(self, job_id: int, status: str, reason: str, job_folder: "str | None" = None) -> None:
         """Record a state that no run folder can express (a posting that could not be prepared, a batch that was stopped)."""

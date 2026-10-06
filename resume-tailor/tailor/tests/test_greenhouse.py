@@ -1,6 +1,7 @@
 """Greenhouse adapter against a synthetic page that behaves like the real React form (behaviour observed on live
 postings): React-Select dropdowns, an async city autocomplete, an intl-tel-input style phone box, hidden helper
 inputs. Headless Chromium, no network."""
+import os
 import sys
 import tempfile
 import unittest
@@ -9,6 +10,7 @@ from unittest import mock
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
+os.environ.setdefault("JOBBOT_NO_SHEET", "1")      # a test must never reach the real Google Sheet
 sys.path.insert(0, str(ROOT / "tests"))
 
 try:

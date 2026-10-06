@@ -1,5 +1,6 @@
 """M4 answer pipeline on the saved real fixtures + a fictional persona. No network, no browser, no LLM."""
 import json
+import os
 import sys
 import unittest
 import unittest.mock
@@ -7,6 +8,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
+os.environ.setdefault("JOBBOT_NO_SHEET", "1")      # a test must never reach the real Google Sheet
 sys.path.insert(0, str(ROOT / "tests"))
 
 import persona  # noqa: E402

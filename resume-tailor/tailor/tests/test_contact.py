@@ -1,5 +1,6 @@
 """The email/phone printed in the resume header live in a gitignored contact.yaml, never in committed files."""
 import re
+import os
 import sys
 import tempfile
 import unittest
@@ -11,6 +12,7 @@ import yaml
 ROOT = Path(__file__).resolve().parents[1]
 REPO = ROOT.parents[1]
 sys.path.insert(0, str(ROOT))
+os.environ.setdefault("JOBBOT_NO_SHEET", "1")      # a test must never reach the real Google Sheet
 
 import render  # noqa: E402
 import tailor  # noqa: E402

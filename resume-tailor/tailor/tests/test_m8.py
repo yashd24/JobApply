@@ -1,6 +1,7 @@
 """M8: clear errors (usage limit, LaTeX, missing profile, unsupported site) and --resume-from."""
 import json
 import subprocess
+import os
 import sys
 import tempfile
 import unittest
@@ -11,6 +12,7 @@ import yaml
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
+os.environ.setdefault("JOBBOT_NO_SHEET", "1")      # a test must never reach the real Google Sheet
 sys.path.insert(0, str(ROOT / "tests"))
 
 import persona  # noqa: E402

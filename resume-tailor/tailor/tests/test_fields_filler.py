@@ -1,6 +1,7 @@
 """M4 field discovery + filler + the dry-run submit guard, in headless Chromium on saved/synthetic HTML.
 Nothing here touches the network (every http request from the page is aborted)."""
 import json
+import os
 import sys
 import tempfile
 import unittest
@@ -8,6 +9,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
+os.environ.setdefault("JOBBOT_NO_SHEET", "1")      # a test must never reach the real Google Sheet
 sys.path.insert(0, str(ROOT / "tests"))
 
 try:

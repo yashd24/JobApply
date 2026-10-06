@@ -2,6 +2,7 @@
 LaTeX is mocked, so these run without MiKTeX/XeLaTeX or network."""
 import copy
 import json
+import os
 import sys
 import tempfile
 import unittest
@@ -12,6 +13,7 @@ import yaml
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
+os.environ.setdefault("JOBBOT_NO_SHEET", "1")      # a test must never reach the real Google Sheet
 
 import guard  # noqa: E402
 import render  # noqa: E402

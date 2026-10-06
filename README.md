@@ -195,9 +195,9 @@ the LLM only for non-sensitive questions), fills it, and outlines what is left f
   refused in prepare / assist / auto (add `--reapply` to override); dry runs are always allowed.
 - **Statuses:** Found, Approved, Ready for you (prepared: next step is yours), Needs review, Manual, Failed, Submitted,
   Skipped. Every posting also has a plain-English **Reason** and the **job folder** of its run.
-- **Google Sheet (optional):** the main tab's columns A-N are written by the bot (including Reason and Job folder),
-  O-R (Response, Interview stage, Follow-up date, My notes) are yours and are never written to; rows are matched by URL
-  so you can sort freely. A second tab, **Action needed**, lists everything waiting on you (Ready for you, Needs review,
+- **Google Sheet (optional):** the main tab's columns A-P are written by the bot (including Reason and Job folder),
+  Q-T (Response, Interview stage, Follow-up date, My notes) are yours and are never written to, U is the job **ID**, and V
+  is your **Approve** checkbox on Found jobs (read, never written); rows are matched by URL so you can sort freely. A second tab, **Action needed**, lists everything waiting on you (Ready for you, Needs review,
   Failed, Manual) with a **Mark applied** checkbox: tick it after you apply by hand and the next sync marks the posting
   Submitted. Setup is in `config.example.yaml`; the first `--sync-sheet` opens a Google sign-in.
 
@@ -270,18 +270,66 @@ logged and kept (`discover.py --board-check --dry-run` previews it). Anything we
 project's venv and folder, so it works from PowerShell or cmd in any folder. (If you move the project, edit the one
 `JOBAPPLY_HOME` line at the top of the file.)
 
+Everything is a `jobapply` command, so you never need to run a Python script yourself.
+
+**Find and choose**
+
 | Type | What it does |
 |---|---|
-| `jobapply` | the full run (`run.py`) |
-| `jobapply dry` | a dry run: discover, filter and score; approve and submit nothing |
+| `jobapply find` | discover and score new jobs only (and refresh the sheet); nothing is approved or applied for |
+| `jobapply list [min-score]` | the Found jobs: ID, score, company, role, location and link; `jobapply list 7` shows score 7 and up |
+| `jobapply approve <ids>` | approve jobs: `approve 3,7,12`, `approve all` (every Found job) or `approve 8+` (every Found job scoring 8 or more) |
+| `jobapply unapprove <ids>` | move approved, unprocessed jobs back to Found without rejecting them: `unapprove 3,7`, `unapprove all` or `unapprove below 7` (jobs with no score are left alone, and so are jobs whose work has already started). If you had ticked Approve in the sheet, untick it (see below) |
+| `jobapply skip <ids>` | reject jobs so they never come back |
+
+**Do the work**
+
+| Type | What it does |
+|---|---|
+| `jobapply process [N]` | prepare or apply the approved jobs (the batch runner), **best score first** (ties: the newest posting), or only the top N now; reads the sheet's Approve ticks first |
+| `jobapply process --list` | the queue in that order, with the score on each row, and which jobs fit in today's cap (`today`) and which wait (`later`); changes nothing |
+| `jobapply` | the full run: find, approve the best (score at or above the threshold, up to the daily cap), process, sync |
+| `jobapply dry` | a dry run of the full run: nothing is approved, processed or submitted |
+| `jobapply url <link>` | tailor and prepare one job from a link; a Greenhouse link is applied per your config mode (assist: you click Submit). For a site whose page title cannot be read add `--company "Acme" --role "Backend Engineer"` |
+| `jobapply retry <id>` | redo a failed, needs-review or manual job from its saved folder, without repeating paid work |
+
+**After that**
+
+| Type | What it does |
+|---|---|
+| `jobapply open <id>` | open the job's link, its `prepare_sheet.html` and its folder in one go |
+| `jobapply done <ids>` | mark jobs as applied, the same as ticking "Mark applied" in the sheet |
+| `jobapply action` | the jobs that need you (Ready for you, Needs review, Manual, Failed), each with its link, folder and reason |
 | `jobapply status [N]` | recent applications |
-| `jobapply sync` | sync the Google Sheet |
-| `jobapply action` | the jobs that need you (Ready for you, Needs review, Manual, Failed), each with its link, job folder and reason |
+| `jobapply sync` | sync the Google Sheet (it also reads the Approve ticks) |
+
+**Housekeeping**
+
+| Type | What it does |
+|---|---|
+| `jobapply check [--quick]` | health check: LaTeX, the Claude login (one tiny request; `--quick` skips it), your profile and files, the sheet connection, the browser |
 | `jobapply log` | open today's run log |
 | `jobapply stop` | stop a run in progress cleanly, from a second terminal (see below) |
-| `jobapply help` | list these |
+| `jobapply help` | list all of these |
 
-Anything else is passed to `run.py`: `jobapply --skip-discovery`, `jobapply dry --skip-discovery`. A run ends with a
+A typical session: `jobapply find`, then `jobapply list 7`, then `jobapply approve 8+` (or tick **Approve** in the sheet),
+then `jobapply process 5`, then `jobapply action` and `jobapply open <id>` for what is waiting on you, and
+`jobapply done <id>` when you have applied. `approve`, `skip` and `done` update the sheet straight away. Nothing is
+scheduled: the bot only runs when you type a command.
+
+**The Approve checkbox.** The sheet's Applications tab has two extra columns after your own: **ID** (the tracker id, for
+`open`, `done` and `retry`) and **Approve**, a checkbox shown on Found jobs. Tick it and the job is approved the next time
+`jobapply process`, any sync (`jobapply sync`, or the sync at the end of every run) or a full run reads the sheet; `process`
+and the full run then prepare it. The bot never writes to the Approve column (the same rule as your own notes, and like
+"Mark applied" ticks are read before anything else is changed and each tick is matched to its job by the link in its own
+row, so sorting the sheet is safe). A tick on a job that is no longer Found changes nothing.
+
+**Unapproving and the tick.** The bot cannot untick a box for you (it never writes to that column). After
+`jobapply unapprove` it lists the rows still ticked, and ignores a tick on an unapproved job until it has seen the box
+unticked once; after that, ticking it again approves it normally. So an unapproved job cannot jump back into the queue
+because of an old tick.
+
+Any other arguments are passed to `run.py`: `jobapply --skip-discovery`, `jobapply dry --skip-discovery`. A run ends with a
 five-number summary (found, scored, submitted, ready for you, needs review) as the last thing on screen; the full
 summary and log stay in `output\runs\`.
 

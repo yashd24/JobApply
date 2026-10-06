@@ -2,6 +2,7 @@
 a daily cap, and the usage-limit stop and resume. No network, no Claude, no browser."""
 import json
 import random
+import os
 import sys
 import tempfile
 import unittest
@@ -14,6 +15,7 @@ import yaml
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
+os.environ.setdefault("JOBBOT_NO_SHEET", "1")      # a test must never reach the real Google Sheet
 sys.path.insert(0, str(ROOT / "tests"))
 
 import apply  # noqa: E402
@@ -295,7 +297,11 @@ class Queue(Base):
         return rep, slept
 
     def row_ids(self, n):
-        return [self.add(f"https://job-boards.greenhouse.io/acme/jobs/{i}", f"Co{i}", "greenhouse") for i in range(1, n + 1)]
+        """n approved jobs; the first has the highest score, so the queue order is the order they are made in."""
+        ids = [self.add(f"https://job-boards.greenhouse.io/acme/jobs/{i}", f"Co{i}", "greenhouse") for i in range(1, n + 1)]
+        for k, jid in enumerate(ids):
+            self.tr.set_relevance(jid, 10 - k, "test score")
+        return ids
 
     def ok(self, ids_done):
         def process(row):
@@ -360,19 +366,19 @@ class Queue(Base):
         rep, slept = self.go(process, batch.Settings((1, 1), 2))
         self.assertEqual(seen, ids[:2])                                              # the third was never started
         self.assertIn("usage limit", rep.stopped)
-        self.assertIn("resumes this job first", rep.stopped)
+        self.assertIn("continues from its saved folder", rep.stopped)
         r = self.tr.by_ids([ids[1]])[0]
         self.assertEqual((r["status"], r["job_folder"]), ("approved", str(folder)))
         self.assertIn("usage limit", r["reason"])
         self.assertEqual(self.tr.batch_count_today(), 1)                              # the stopped job did not use the cap
-        # the next run resumes that job FIRST, ahead of earlier ids, and passes the saved folder on
+        # the next run works the queue by score; the stopped job continues from its saved folder when its turn comes
         calls = []
         proc = batch.make_processor(self.tr, CFG, apply_run=lambda url, **kw: calls.append((url, kw.get("resume_from"))),
                                     profile_loader=persona.profile, resume_loader=persona.resume)
         self.tr.set_state(ids[0], "approved", "waiting")                              # an earlier id is still queued
         batch.run_batch(self.tr, CFG, batch.Settings((1, 1), 10), process=proc, sleep=lambda s: None, log=lambda *a: None)
-        self.assertEqual(calls[0][1], folder)
-        self.assertEqual(calls[0][0], T.key("https://job-boards.greenhouse.io/acme/jobs/2"))
+        self.assertEqual([c[0] for c in calls], [T.key(f"https://job-boards.greenhouse.io/acme/jobs/{i}") for i in (1, 2, 3)])
+        self.assertEqual([c[1] for c in calls], [None, folder, None])                # by score; job 2 keeps its folder
 
     def test_a_usage_limit_without_a_folder_still_stops_cleanly(self):
         ids = self.row_ids(2)

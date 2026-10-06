@@ -1,12 +1,14 @@
 """M6 verification: saved confirmation and error pages are classified correctly. `classify` is tested on page text;
 the same fixtures are also loaded into real headless Chromium behind the employer's real URL shapes. The Greenhouse
 confirmation and the Lever refusal wording were seen in live runs (2026-10-01/02); the other pages are synthetic."""
+import os
 import sys
 import unittest
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
+os.environ.setdefault("JOBBOT_NO_SHEET", "1")      # a test must never reach the real Google Sheet
 
 try:
     from playwright.sync_api import sync_playwright

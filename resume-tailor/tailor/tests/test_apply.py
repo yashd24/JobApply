@@ -3,6 +3,7 @@ Proves the M4 guarantees: the run is a dry run, answers.json records every answe
 server never receives a submission."""
 import http.server
 import json
+import os
 import sys
 import tempfile
 import threading
@@ -14,6 +15,7 @@ import yaml
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
+os.environ.setdefault("JOBBOT_NO_SHEET", "1")      # a test must never reach the real Google Sheet
 sys.path.insert(0, str(ROOT / "tests"))
 
 try:
